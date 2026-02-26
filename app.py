@@ -252,7 +252,6 @@ def build_address(tags: dict) -> str:
 # =========================
 # UI
 # =========================
-st.image("LOGOOFICIALBRANCA.png", width=220) if True else None
 st.subheader("Sua ferramenta para encontrar lojistas multimarcas (estética IG)")
 
 with st.sidebar:
