@@ -3,131 +3,191 @@ import pandas as pd
 import requests
 import re
 import time
-import io
+import random
+from bs4 import BeautifulSoup
+from io import BytesIO
 
-# --- CONFIGURAÇÕES ---
-st.set_page_config(
-    page_title="Verso Vivo ELITE - Prospecção Feminina",
-    page_icon="👗",
-    layout="wide"
-)
+# --- CONFIGURAÇÕES DA PÁGINA ---
+st.set_page_config(page_title="Verso Sourcing Pro 3.0", page_icon="👗", layout="wide")
 
-# --- ESTILIZAÇÃO ---
+# --- CSS CUSTOMIZADO ---
 st.markdown("""
     <style>
-    .main { background-color: #fff5f8; }
-    .stButton>button {
-        width: 100%;
-        border-radius: 20px;
-        height: 3.5em;
-        background-color: #d81b60;
-        color: white;
-        font-weight: bold;
-        border: none;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 8px; border: none; background-color: #d81b60; color: white; font-weight: bold; height: 3em; transition: all 0.3s ease; }
+    .stButton>button:hover { background-color: #ad1457; transform: scale(1.02); }
+    .card { background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 15px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); border-left: 5px solid #d81b60; }
     .stProgress > div > div > div > div { background-color: #d81b60; }
-    h1, h2, h3 { color: #880e4f; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- FUNÇÕES DE BUSCA ---
 
-def normalize_instagram(value: str) -> str:
-    if not value: return ""
-    v = value.strip().split("?")[0].split("#")[0]
-    if v.startswith("@"): return v
-    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", v, flags=re.IGNORECASE)
-    if m:
-        handle = m.group(1).strip("/")
-        if handle.lower() not in {"p", "reel", "reels", "tv", "stories", "explore"}:
-            return f"@{handle}"
-    if re.fullmatch(r"[A-Za-z0-9._]{2,30}", v): return f"@{v}"
-    return v
-
-def overpass_query_ultra_refined(city_name):
-    OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-    q = f"""
-    [out:json][timeout:180];
-    area["name"="{city_name}"]["admin_level"~"4|8"]->.a;
+def overpass_query(city_name):
+    """Busca lojas no Overpass API."""
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    query = f"""
+    [out:json][timeout:90];
+    area["name"="{city_name}"]["boundary"="administrative"]->.searchArea;
     (
-      nwr(area.a)["shop"="clothes"];
-      nwr(area.a)["shop"="boutique"];
-      nwr(area.a)["shop"="fashion"];
+      nwr["shop"~"clothes|boutique|apparel|fashion|clothing"](area.searchArea);
     );
     out center tags;
     """
     try:
-        r = requests.post(OVERPASS_URL, data=q.encode("utf-8"), timeout=200)
-        return r.json().get("elements", []) or []
-    except:
+        response = requests.get(overpass_url, params={'data': query}, timeout=90)
+        if response.status_code == 200:
+            return response.json().get('elements', [])
+        return []
+    except Exception as e:
         return []
 
-def filter_female_multibrand(elements, city):
-    qualified = []
-    seen = set()
-    
-    termos_alvo = ["feminina", "mulher", "boutique", "multimarcas", "concept", "moda", "store", "closet", "estilo", "look", "chic", "fashion", "curadoria", "trend", "luxo", "premium"]
-    termos_excluir = ["car", "auto", "oficina", "moto", "veiculos", "masculino", "homem", "kids", "infantil", "bebe", "baby", "renner", "cea", "c&a", "riachuelo", "marisa", "zara", "pernambucanas", "havan", "magazine", "casas bahia"]
+def search_instagram_username(store_name, city):
+    """Busca o username do Instagram no Google via raspagem leve."""
+    query = f"{store_name} {city} instagram"
+    url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    try:
+        # Pequeno delay para evitar bloqueios rápidos
+        time.sleep(random.uniform(1, 2))
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if 'instagram.com/' in href:
+                    # Extrair o username
+                    match = re.search(r'instagram\.com/([^/?&]+)', href)
+                    if match:
+                        username = match.group(1)
+                        if username not in ['reels', 'stories', 'explore', 'p', 'tags']:
+                            return username
+        return None
+    except:
+        return None
 
-    for el in elements:
-        tags = el.get("tags", {}) or {}
-        nome = (tags.get("name") or "").strip()
-        if not nome: continue
+def get_instagram_data(username):
+    """Extrai seguidores e bio do perfil público do Instagram."""
+    if not username:
+        return "N/A", "N/A", "N/A"
+    
+    url = f"https://www.instagram.com/{username}/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            meta_desc = soup.find("meta", property="og:description")
+            if meta_desc:
+                content = meta_desc.get("content", "")
+                # Exemplo: "1,234 Followers, 567 Following, 89 Posts..."
+                followers_match = re.search(r'([\d.,KM]+)\s*Followers', content)
+                followers = followers_match.group(1) if followers_match else "N/A"
+                return f"@{username}", followers, content
+        return f"@{username}", "N/A", "Perfil encontrado"
+    except:
+        return f"@{username}", "N/A", "Erro ao acessar"
+
+# --- FILTROS ---
+
+def is_valid_store(name, tags):
+    """Filtra para manter apenas lojas de moda feminina e excluir grandes redes."""
+    name_lower = name.lower()
+    exclude = ['renner', 'c&a', 'zara', 'riachuelo', 'marisa', 'pernambucanas', 'havan', 'carrefour', 'extra', 'pão de açúcar']
+    if any(x in name_lower for x in exclude):
+        return False
+    
+    # Palavras-chave de moda feminina/boutique
+    keywords = ['feminina', 'boutique', 'concept', 'moda', 'fashion', 'estilo', 'look', 'vestuário', 'multimarca']
+    if any(k in name_lower for k in keywords):
+        return True
+    
+    # Se não tiver palavra-chave, mas for shop=clothes/boutique, mantemos por precaução
+    shop_type = tags.get('shop', '')
+    if shop_type in ['boutique', 'clothes']:
+        return True
         
-        nome_l = nome.lower()
-        if any(ex in nome_l for ex in termos_excluir): continue
-        if not any(t in nome_l or (tags.get("description") or "").lower() in t for t in termos_alvo): continue
-            
-        if nome_l in seen: continue
-        seen.add(nome_l)
-        
-        tel = (tags.get("phone") or tags.get("contact:phone") or "").strip()
-        insta = (tags.get("contact:instagram") or tags.get("instagram") or "").strip()
-        site = (tags.get("website") or tags.get("contact:website") or "").strip()
-        
-        qualified.append({
-            "Loja": nome,
-            "Cidade": city,
-            "Instagram": normalize_instagram(insta),
-            "WhatsApp/Tel": tel,
-            "Site": site,
-            "Endereço": f"{tags.get('addr:street', '')}, {tags.get('addr:housenumber', '')}".strip(", ")
-        })
-    return qualified
+    return False
 
 # --- INTERFACE ---
-
-st.title("👗 Verso Vivo ELITE")
-st.subheader("O buscador definitivo de Lojistas Multimarcas Femininas")
+st.title("👗 Verso Sourcing Pro 3.0")
+st.subheader("Prospecção Inteligente de Lojas Multimarcas")
 
 with st.sidebar:
-    st.header("📍 Cidades para Prospectar")
-    cidades_input = st.text_area("Digite as cidades (uma por linha):", value="Florianópolis\nCuritiba\nSão Paulo\nPorto Alegre", height=200)
-    cidades = [c.strip() for c in cidades_input.split("\n") if c.strip()]
-    st.info("O algoritmo bloqueia automaticamente lojas de carros e grandes redes.")
+    st.header("Configurações")
+    city_input = st.text_input("Cidades (separadas por vírgula):", placeholder="Ex: São Paulo, Curitiba")
+    limit = st.slider("Limite de lojas por cidade (para teste):", 5, 50, 20)
+    st.info("O enriquecimento do Instagram pode demorar alguns segundos por loja para evitar bloqueios.")
 
-if st.button("🚀 GERAR LISTA DE LEADS"):
-    if not cidades:
-        st.error("Insira ao menos uma cidade.")
-    else:
-        all_results = []
-        progress_bar = st.progress(0)
-        status = st.empty()
+if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
+    if city_input:
+        cities = [c.strip() for c in city_input.split(',') if c.strip()]
+        all_leads = []
         
-        for idx, cidade in enumerate(cidades):
-            status.info(f"🔎 Mapeando lojas em **{cidade}**...")
-            raw_elements = overpass_query_ultra_refined(cidade)
-            leads = filter_female_multibrand(raw_elements, cidade)
-            all_results.extend(leads)
-            progress_bar.progress((idx + 1) / len(cidades))
-            time.sleep(1)
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, city in enumerate(cities):
+            status_text.text(f"Buscando lojas em {city}...")
+            raw_elements = overpass_query(city)
+            
+            valid_stores = []
+            for el in raw_elements:
+                tags = el.get('tags', {})
+                name = tags.get('name')
+                if name and is_valid_store(name, tags):
+                    valid_stores.append((name, tags))
+            
+            # Limitar para não demorar demais no teste/demonstração
+            valid_stores = valid_stores[:limit]
+            
+            for i, (name, tags) in enumerate(valid_stores):
+                status_text.text(f"[{city}] Enriquecendo: {name} ({i+1}/{len(valid_stores)})")
+                
+                username = search_instagram_username(name, city)
+                handle, followers, bio = get_instagram_data(username)
+                
+                all_leads.append({
+                    "Loja": name,
+                    "Cidade": city,
+                    "Instagram": handle,
+                    "Seguidores": followers,
+                    "Bio": bio,
+                    "Telefone": tags.get('phone') or tags.get('contact:phone') or "N/A",
+                    "Endereço": f"{tags.get('addr:street', '')}, {tags.get('addr:housenumber', '')}".strip(', ') or "N/A"
+                })
+                
+            progress_bar.progress((idx + 1) / len(cities))
+            
+        status_text.text("✅ Prospecção concluída!")
+        
+        if all_leads:
+            df = pd.DataFrame(all_leads)
+            st.success(f"Encontradas {len(df)} lojas qualificadas!")
+            
+            # Métricas
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total de Leads", len(df))
+            m2.metric("Cidades", len(cities))
+            m3.metric("Com Instagram", len(df[df['Instagram'] != 'N/A']))
 
-        status.success(f"✅ Encontramos **{len(all_results)}** lojas qualificadas.")
-        if all_results:
-            df = pd.DataFrame(all_results)
-            st.dataframe(df, use_container_width=True)
-            output = io.BytesIO()
+            # Tabela de resultados
+            st.dataframe(df)
+            
+            # Download Excel
+            output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Leads_Elite')
-            st.download_button(label="📥 BAIXAR PLANILHA (.xlsx)", data=output.getvalue(), file_name=f"leads_elite_{time.strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                df.to_excel(writer, index=False, sheet_name='Leads')
+            
+            st.download_button(
+                label="📥 Baixar Planilha Excel (.xlsx)",
+                data=output.getvalue(),
+                file_name=f"leads_verso_vivo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.warning("Por favor, digite pelo menos uma cidade.")
