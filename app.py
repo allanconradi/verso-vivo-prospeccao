@@ -120,7 +120,7 @@ st.subheader("Prospecção Inteligente de Lojas Multimarcas")
 with st.sidebar:
     st.header("Configurações")
     city_input = st.text_input("Cidades (separadas por vírgula):", placeholder="Ex: São Paulo, Curitiba")
-    limit = st.slider("Limite de lojas por cidade (para teste):", 5, 50, 20)
+    limit = st.slider("Limite de lojas por cidade (para teste):", 5, 500, 250)
     st.info("O enriquecimento do Instagram pode demorar alguns segundos por loja para evitar bloqueios.")
 
 if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
