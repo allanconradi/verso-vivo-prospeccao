@@ -8,140 +8,110 @@ from bs4 import BeautifulSoup
 from io import BytesIO
 from urllib.parse import quote_plus
 
-# --- CONFIGURAÇÕES DA PÁGINA ---
-st.set_page_config(page_title="Verso Vivo - Buscador Multimarcas", page_icon="📸", layout="wide")
+# =========================
+# CONFIGURAÇÕES DA PÁGINA
+# =========================
+st.set_page_config(page_title="Verso Sourcing Pro", page_icon="📸", layout="wide")
 
-# --- CSS (Instagram-like, desktop, SF font, bigger UI) ---
+# =========================
+# CSS (IG-like + Desktop readable)
+# =========================
 st.markdown("""
 <style>
-/* SF on macOS/iOS, Segoe on Windows (desktop) */
 html, body, [class*="st-"] {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
                "Helvetica Neue", Helvetica, Arial, "Segoe UI", Roboto, sans-serif !important;
-  color: #111;
+  color: #0f1419;
+  font-size: 16px;
+}
+.stApp { background: #fafafa; }
+
+.main .block-container{
+  max-width: 1400px;
+  padding-top: 1.6rem;
+  padding-bottom: 2.2rem;
 }
 
-/* Background like Instagram web */
-.stApp { background: #fafafa; }
-.main .block-container { padding-top: 1.8rem; padding-bottom: 2.2rem; max-width: 1400px; }
-
-/* Hide Streamlit chrome (optional) */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
+header {visibility: hidden;}
 
-/* Headings */
-h1 { font-size: 38px !important; font-weight: 900 !important; letter-spacing: -0.5px; margin-bottom: 0.25rem; }
-h2 { font-size: 26px !important; font-weight: 800 !important; letter-spacing: -0.3px; }
-h3 { font-size: 20px !important; font-weight: 800 !important; }
+h1,h2,h3 { letter-spacing: -0.2px; }
 
-/* Inputs */
-.stTextInput > div > div > input {
-  border-radius: 14px !important;
+.stTextInput>div>div>input {
+  border-radius: 12px !important;
   border: 1px solid #dbdbdb !important;
   background: #fff !important;
-  padding: 12px 14px !important;
-  font-size: 15px !important;
-  height: 48px !important;
-}
-.stSelectbox > div > div > div, .stSlider {
-  font-size: 15px !important;
-}
-.stSlider > div { padding-top: 8px; }
-
-/* Sidebar look */
-section[data-testid="stSidebar"] {
-  background: #ffffff !important;
-  border-right: 1px solid #ededed !important;
-}
-section[data-testid="stSidebar"] .block-container {
-  padding-top: 1.25rem !important;
-}
-
-/* Primary button (bigger) */
-.stButton > button {
-  width: 100%;
-  border-radius: 999px !important;
-  border: 1px solid transparent !important;
-  background: #0095f6 !important; /* IG blue */
-  color: #fff !important;
-  font-weight: 900 !important;
+  padding: 12px 12px !important;
+  box-shadow: none !important;
   font-size: 16px !important;
+}
+.stSlider, .stSlider * { font-size: 15px !important; }
+
+.stButton>button{
+  width:100%;
+  border-radius: 14px !important;
+  border: 0 !important;
+  background: linear-gradient(45deg, #f02d71, #ff6600) !important;
+  color: #fff !important;
+  font-weight: 800 !important;
   height: 52px !important;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.08) !important;
-  transition: filter .15s ease, transform .15s ease;
+  font-size: 16px !important;
+  box-shadow: 0 6px 16px rgba(240, 45, 113, 0.18) !important;
+  transition: transform .15s ease, filter .15s ease;
 }
-.stButton > button:hover { filter: brightness(0.96); transform: translateY(-1px); }
+.stButton>button:hover{ transform: translateY(-1px); filter: brightness(0.98); }
 
-/* Progress bar */
-.stProgress > div > div > div > div { background-color: #0095f6 !important; }
-
-/* Metric chips */
-.chip-row{ display:flex; flex-wrap:wrap; gap:10px; margin: 6px 0 18px 0;}
-.chip{
-  display:inline-flex; align-items:center; gap:8px;
-  padding: 8px 12px; border-radius: 999px;
-  background: #efefef; border: 1px solid #efefef;
-  font-size: 13px; font-weight: 900; color: #111;
-}
-.chip span{ color:#6e6e6e; font-weight: 900; }
-
-/* Result card (Instagram-like post) */
-.card {
-  background-color: #fff;
-  padding: 18px 18px 16px 18px;
+.card{
+  background:#fff;
+  border:1px solid #e7e7e7;
   border-radius: 18px;
-  border: 1px solid #dbdbdb;
-  margin-bottom: 16px;
-  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  padding: 16px 16px 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.05);
 }
-.card-header{
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  margin-bottom: 10px;
+.card h4{
+  margin: 0 0 6px 0;
+  font-size: 17px;
+  font-weight: 900;
 }
-.user{
-  display:flex; align-items:center; gap:12px; min-width:0;
+.muted{ color:#6e6e6e; font-size: 13px; line-height:1.35; }
+.row{
+  display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; align-items:center;
 }
-.avatar{
-  width:44px; height:44px; border-radius: 999px;
-  background: linear-gradient(135deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5);
-  display:flex; align-items:center; justify-content:center; flex: 0 0 auto;
-}
-.avatar-inner{
-  width:40px; height:40px; border-radius: 999px; background:#fff;
-  display:flex; align-items:center; justify-content:center;
-  font-weight: 900; font-size: 13px;
-}
-.title{
-  font-weight: 950; font-size: 16px; line-height: 1.15;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.subtitle{ font-size: 13px; color:#6e6e6e; margin-top: 1px; }
-
-.row{ margin-top: 8px; font-size: 14px; line-height: 1.35; color:#111; }
-.label{ color:#6e6e6e; font-weight: 900; margin-right: 6px; }
-
-.actions{ display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px; }
 .pill{
-  display:inline-flex; align-items:center; justify-content:center;
-  padding: 10px 14px; border-radius: 999px;
-  font-size: 13px; font-weight: 950;
-  border: 1px solid #dbdbdb; background:#fff; color:#111 !important;
-  text-decoration:none !important;
+  display:inline-flex; align-items:center; gap:8px;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background:#f2f2f2;
+  border:1px solid #f2f2f2;
+  font-size: 13px;
+  font-weight: 800;
+  color:#111;
 }
-.pill-primary{ background:#0095f6; border-color:#0095f6; color:#fff !important; }
-.pill-muted{ background:#efefef; border-color:#efefef; color:#111 !important; }
+a { color:#00376b !important; text-decoration:none; font-weight: 800; }
+a:hover { text-decoration: underline; }
 
-a { color:#00376b !important; text-decoration:none; }
-a:hover { text-decoration:underline; }
-.small-note{ color:#6e6e6e; font-size: 13px; }
-
+.metric-wrap{
+  display:flex; flex-wrap:wrap; gap:10px; margin: 8px 0 14px 0;
+}
+.metric{
+  border-radius: 999px;
+  padding: 10px 14px;
+  background:#fff;
+  border:1px solid #e7e7e7;
+  font-weight: 900;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE BUSCA ---
+# =========================
+# FUNÇÕES (BUSCA)
+# =========================
 
 def overpass_query(city_name: str):
-    """Busca lojas no Overpass API."""
+    """Busca POIs de lojas no Overpass API."""
     overpass_url = "https://overpass-api.de/api/interpreter"
     query = f"""
     [out:json][timeout:90];
@@ -152,233 +122,226 @@ def overpass_query(city_name: str):
     out center tags;
     """
     try:
-        response = requests.get(overpass_url, params={'data': query}, timeout=90)
-        if response.status_code == 200:
-            return response.json().get('elements', [])
+        r = requests.get(overpass_url, params={"data": query}, timeout=90)
+        if r.status_code == 200:
+            return r.json().get("elements", [])
         return []
     except Exception:
         return []
 
-def search_instagram_username(store_name: str, city: str):
-    """Busca o username do Instagram no Google via raspagem leve."""
-    query = f"{store_name} {city} instagram"
-    url = f"https://www.google.com/search?q={quote_plus(query)}"
-    headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/123.0 Safari/537.36"),
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    }
-    try:
-        time.sleep(random.uniform(1.0, 2.0))
-        response = requests.get(url, headers=headers, timeout=12)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if 'instagram.com/' in href:
-                    match = re.search(r'instagram\.com/([^/?&]+)', href)
-                    if match:
-                        username = match.group(1)
-                        if username not in ['reels', 'stories', 'explore', 'p', 'tags']:
-                            return username
-        return None
-    except Exception:
-        return None
+FOOD_EXCLUDE = [
+    "bar", "restaurante", "restaurant", "lanchonete", "lanches", "hamburguer", "hamburger",
+    "café", "cafe", "cafeteria", "pizza", "pizzaria", "sushi", "japones", "japonês",
+    "açaí", "acai", "sorveteria", "padaria", "bakery", "churrasco", "steakhouse",
+    "cervejaria", "brew", "pub", "drinks", "bistrô", "bistro", "food", "bebidas", "alimentos",
+    "a&b", "comida", "cozinha", "mercado", "supermercado"
+]
 
-def get_instagram_data(username: str):
-    """Extrai seguidores e bio do perfil público do Instagram."""
-    if not username:
-        return "N/A", "N/A", "N/A"
+BIG_RETAIL_EXCLUDE = [
+    "renner","c&a","zara","riachuelo","marisa","pernambucanas","havan","carrefour","extra","pão de açúcar","pao de acucar"
+]
 
-    url = f"https://www.instagram.com/{username}/"
-    headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/123.0 Safari/537.36"),
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=12)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            meta_desc = soup.find("meta", property="og:description")
-            if meta_desc:
-                content = meta_desc.get("content", "")
-                followers_match = re.search(r'([\d.,KM]+)\s*Followers', content)
-                followers = followers_match.group(1) if followers_match else "N/A"
-                return f"@{username}", followers, content
-        # 429/403/etc:
-        return f"@{username}", "N/A", f"Perfil encontrado (status {response.status_code})"
-    except Exception:
-        return f"@{username}", "N/A", "Erro ao acessar"
+FEM_KEYWORDS = ["feminina","boutique","concept","moda","fashion","estilo","look","vestuário","vestuario","multimarca"]
 
-# --- FILTROS ---
+def is_valid_store(name: str, tags: dict) -> bool:
+    """Mantém lojas de moda e elimina grandes redes + alimentação/bebidas."""
+    name_lower = (name or "").lower()
 
-def is_valid_store(name: str, tags: dict):
-    """Filtra para manter apenas lojas de moda feminina e excluir grandes redes."""
-    name_lower = name.lower()
-    exclude = ['renner', 'c&a', 'zara', 'riachuelo', 'marisa', 'pernambucanas', 'havan', 'carrefour', 'extra', 'pão de açúcar', 'pao de acucar']
-    if any(x in name_lower for x in exclude):
+    if any(x in name_lower for x in BIG_RETAIL_EXCLUDE):
         return False
 
-    keywords = ['feminina', 'boutique', 'concept', 'moda', 'fashion', 'estilo', 'look', 'vestuário', 'vestuario', 'multimarca']
-    if any(k in name_lower for k in keywords):
+    # Eliminar claramente alimentação/bebidas pelo nome
+    if any(x in name_lower for x in FOOD_EXCLUDE):
+        return False
+
+    # Eliminar se OSM indicar amenity/cuisine/food
+    if tags.get("amenity") in ["restaurant", "cafe", "bar", "pub", "fast_food"]:
+        return False
+    if "cuisine" in tags or "brewery" in tags or "bar" in tags:
+        # tags variadas que costumam aparecer em A&B
+        return False
+
+    # Preferência por palavras-chave de moda feminina/boutique
+    if any(k in name_lower for k in FEM_KEYWORDS):
         return True
 
-    shop_type = tags.get('shop', '')
-    if shop_type in ['boutique', 'clothes']:
+    # Fallback: se for shop clothes/boutique, mantém
+    shop_type = tags.get("shop", "")
+    if shop_type in ["boutique", "clothes", "apparel", "fashion", "clothing"]:
         return True
 
     return False
 
-def initials(name: str) -> str:
-    parts = [p for p in re.split(r"\s+", name.strip()) if p]
-    if not parts:
-        return "VV"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
+def _google_search_html(q: str) -> str | None:
+    url = f"https://www.google.com/search?q={quote_plus(q)}&hl=pt-BR&gl=BR"
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"),
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+    try:
+        time.sleep(random.uniform(1.0, 2.0))
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code == 200:
+            return r.text
+        return None
+    except Exception:
+        return None
 
-# --- INTERFACE ---
-st.title("📸 Verso Vivo - Buscador de Multimarcas")
-st.subheader("Sua ferramenta para encontrar parceiros de moda feminina")
+def search_instagram_username(store_name: str, city: str) -> str | None:
+    """
+    Estratégia manual automatizada:
+    1) '{Loja} Instagram' e tentar escolher resultado que menciona a cidade.
+    2) fallback: '{Loja} {Cidade} Instagram'
+    Retorna apenas username (sem followers/bio).
+    """
+    def pick_username_from_html(html: str, city_hint: str | None):
+        soup = BeautifulSoup(html, "lxml")
+        candidates = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "instagram.com/" not in href:
+                continue
+            m = re.search(r"instagram\.com/([^/?&]+)", href)
+            if not m:
+                continue
+            username = m.group(1)
+            if username in ["reels","stories","explore","p","tags"]:
+                continue
+
+            # Score pelo contexto (texto do bloco)
+            score = 0
+            block = a.find_parent("div")
+            if block:
+                txt = block.get_text(" ", strip=True).lower()
+                if city_hint and city_hint.lower() in txt:
+                    score += 3
+                # se menciona instagram + loja (não garantido)
+                if "instagram" in txt:
+                    score += 1
+            # Prioriza perfis (não /p/, /reels/ etc já filtramos)
+            candidates.append((score, username))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    q1 = f"{store_name} instagram"
+    html1 = _google_search_html(q1)
+    if html1:
+        u = pick_username_from_html(html1, city)
+        if u:
+            return u
+
+    q2 = f"{store_name} {city} instagram"
+    html2 = _google_search_html(q2)
+    if html2:
+        u = pick_username_from_html(html2, city)
+        if u:
+            return u
+
+    return None
+
+def build_address(tags: dict) -> str:
+    street = tags.get("addr:street", "")
+    num = tags.get("addr:housenumber", "")
+    addr = f"{street}, {num}".strip(", ").strip()
+    return addr if addr else "N/A"
+
+# =========================
+# UI
+# =========================
+st.image("LOGOOFICIALBRANCA.png", width=220) if True else None
+st.subheader("Sua ferramenta para encontrar lojistas multimarcas (estética IG)")
 
 with st.sidebar:
     st.header("Configurações")
-    city_input = st.text_input("Cidades (separadas por vírgula):", placeholder="Ex: São Paulo, Curitiba")
+    city_input = st.text_input("Cidades (separadas por vírgula):", placeholder="Ex: Florianópolis, Curitiba")
     limit = st.slider("Limite de lojas por cidade:", 10, 500, 100)
-    st.info("O enriquecimento do Instagram pode demorar alguns segundos por loja para evitar bloqueios. Comece com 20–50 por cidade. 😉")
+    st.info("Dica: comece com 20–50 por cidade para reduzir bloqueios do Google.")
+    start = st.button("🚀 INICIAR PROSPECÇÃO")
 
-run = st.sidebar.button("🚀 Iniciar prospecção")
-
-if run:
+if start:
     if not city_input.strip():
         st.warning("Por favor, digite pelo menos uma cidade.")
         st.stop()
 
-    # Split robusto: aceita vírgula, ponto-e-vírgula e quebra de linha
-    cities = [c.strip() for c in re.split(r"[,;\n]+", city_input) if c.strip()]
-
+    # split robusto
+    cities = [c.strip() for c in re.split(r",|\n|;", city_input) if c.strip()]
     all_leads = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+
+    progress = st.progress(0)
+    status = st.empty()
 
     for idx, city in enumerate(cities):
-        status_text.text(f"Buscando lojas em {city}...")
-        raw_elements = overpass_query(city)
+        status.markdown(f"**Buscando lojas em {city}...**")
+        raw = overpass_query(city)
 
-        valid_stores = []
-        for el in raw_elements:
-            tags = el.get('tags', {})
-            name = tags.get('name')
+        valid = []
+        for el in raw:
+            tags = el.get("tags", {})
+            name = tags.get("name")
             if name and is_valid_store(name, tags):
-                valid_stores.append((name, tags))
+                valid.append((name, tags))
 
-        valid_stores = valid_stores[:limit]
+        valid = valid[:limit]
 
-        for i, (name, tags) in enumerate(valid_stores):
-            status_text.text(f"[{city}] Enriquecendo: {name} ({i+1}/{len(valid_stores)})")
-
+        for i, (name, tags) in enumerate(valid):
+            status.markdown(f"**[{city}]** Enriquecendo Instagram: **{name}** ({i+1}/{len(valid)})")
             username = search_instagram_username(name, city)
-            handle, followers, bio = get_instagram_data(username)
-
-            endereco = f"{tags.get('addr:street', '')}, {tags.get('addr:housenumber', '')}".strip(', ').strip()
-            if not endereco:
-                endereco = "N/A"
+            handle = f"@{username}" if username else "N/A"
 
             all_leads.append({
                 "Loja": name,
                 "Cidade": city,
                 "Instagram": handle,
-                "Seguidores": followers,
-                "Bio": bio,
-                "Telefone": tags.get('phone') or tags.get('contact:phone') or "N/A",
-                "Endereço": endereco
+                "Telefone": tags.get("phone") or tags.get("contact:phone") or "N/A",
+                "Endereço": build_address(tags)
             })
 
-        progress_bar.progress((idx + 1) / max(1, len(cities)))
+        progress.progress((idx + 1) / max(1, len(cities)))
 
-    status_text.text("✅ Busca concluída!")
+    status.markdown("✅ **Prospecção concluída!**")
 
-    if all_leads:
-        df = pd.DataFrame(all_leads)
-        st.success(f"Encontradas {len(df)} lojas qualificadas!")
+    if not all_leads:
+        st.info("Nenhuma loja encontrada com os filtros atuais. Tente outra cidade.")
+        st.stop()
 
-        # Métricas (chips)
-        total = len(df)
-        cidades_n = len(set(df["Cidade"]))
-        com_insta = int((df["Instagram"] != "N/A").sum())
+    df = pd.DataFrame(all_leads)
+
+    st.markdown("### ✨ Lojas Encontradas")
+    st.markdown(f"""
+    <div class="metric-wrap">
+      <div class="metric">Total: {len(df)}</div>
+      <div class="metric">Cidades: {len(set(df["Cidade"]))}</div>
+      <div class="metric">Com Instagram: {int((df["Instagram"]!="N/A").sum())}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    for _, row in df.iterrows():
+        insta = row["Instagram"]
+        insta_link = f"https://instagram.com/{insta[1:]}" if isinstance(insta, str) and insta.startswith("@") else None
+
         st.markdown(f"""
-        <div class="chip-row">
-          <div class="chip"><span>Total</span> {total}</div>
-          <div class="chip"><span>Cidades</span> {cidades_n}</div>
-          <div class="chip"><span>Com Instagram</span> {com_insta}</div>
+        <div class="card">
+          <h4>{row["Loja"]} <span class="muted">· {row["Cidade"]}</span></h4>
+          <div class="row">
+            <span class="pill">📸 Instagram: {"<a href='"+insta_link+"' target='_blank'>"+insta+"</a>" if insta_link else insta}</span>
+            <span class="pill">📞 {row["Telefone"]}</span>
+          </div>
+          <div class="muted" style="margin-top:10px;"><b>Endereço:</b> {row["Endereço"]}</div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("### ✨ Lojas Encontradas")
+    # Download Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Leads")
 
-        # Cards estilo “post”
-        for _, row in df.iterrows():
-            loja = row["Loja"]
-            cidade = row["Cidade"]
-            instagram = row["Instagram"]
-            seguidores = row["Seguidores"]
-            bio = row["Bio"]
-            telefone = row["Telefone"]
-            endereco = row["Endereço"]
-
-            av = initials(loja)
-            insta_url = f"https://instagram.com/{instagram[1:]}" if isinstance(instagram, str) and instagram.startswith("@") else ""
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus((endereco if endereco!='N/A' else f'{loja} {cidade}'))}"
-
-            actions = ""
-            if insta_url:
-                actions += f"<a class='pill pill-primary' href='{insta_url}' target='_blank'>Ver Instagram</a>"
-            else:
-                actions += f"<span class='pill pill-muted'>Sem Instagram</span>"
-            actions += f"<a class='pill pill-muted' href='{maps_url}' target='_blank'>Ver no Maps</a>"
-
-            # Copiar telefone (best-effort)
-            if telefone and telefone != "N/A":
-                safe_phone = str(telefone).replace("'", "\\'")
-                actions += f"<a class='pill pill-muted' href='#' onclick=\"navigator.clipboard.writeText('{safe_phone}'); return false;\">Copiar telefone</a>"
-            else:
-                actions += f"<span class='pill pill-muted'>Telefone N/A</span>"
-
-            st.markdown(f"""
-            <div class="card">
-              <div class="card-header">
-                <div class="user">
-                  <div class="avatar"><div class="avatar-inner">{av}</div></div>
-                  <div style="min-width:0;">
-                    <div class="title">{loja}</div>
-                    <div class="subtitle">{cidade}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="row"><span class="label">Instagram:</span> {f"<a href='{insta_url}' target='_blank'>{instagram}</a>" if insta_url else instagram}</div>
-              <div class="row"><span class="label">Seguidores:</span> {seguidores}</div>
-              <div class="row"><span class="label">Telefone:</span> {telefone}</div>
-              <div class="row"><span class="label">Bio:</span> {bio}</div>
-              <div class="row"><span class="label">Endereço:</span> {endereco}</div>
-
-              <div class="actions">{actions}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Download Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Leads')
-
-        st.download_button(
-            label="📥 Baixar Planilha Excel (.xlsx)",
-            data=output.getvalue(),
-            file_name="leads_verso_vivo.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.info("Nenhuma loja encontrada com os filtros atuais. Tente outra cidade ou aumente o limite.")
+    st.download_button(
+        label="📥 Baixar Planilha Excel (.xlsx)",
+        data=output.getvalue(),
+        file_name="leads_verso_vivo.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
