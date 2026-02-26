@@ -252,7 +252,7 @@ def build_address(tags: dict) -> str:
 # =========================
 # UI
 # =========================
-st.subheader("Sua ferramenta para encontrar lojistas multimarcas (estética IG)")
+st.subheader("Sua ferramenta para encontrar lojistas multimarcas")
 
 with st.sidebar:
     st.header("Configurações")
