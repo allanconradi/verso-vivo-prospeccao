@@ -1,4 +1,4 @@
-new_code = r'''import streamlit as st
+import streamlit as st
 import pandas as pd
 import requests
 import re
@@ -608,9 +608,3 @@ with col_feed:
             file_name="leads_verso_vivo.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-'''
-out_path="/mnt/data/verso_sourcing_pro_instagram.py"
-with open(out_path,'w',encoding='utf-8') as f:
-    f.write(new_code)
-out_path, os.path.getsize(out_path)
-
