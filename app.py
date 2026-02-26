@@ -13,10 +13,10 @@ st.set_page_config(page_title="Verso Sourcing Pro 3.0", page_icon="📸", layout
 # --- CSS CUSTOMIZADO (Instagram-like) ---
 st.markdown("""
     <style>
-    @import url(\'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap\');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
 
     html, body, [class*="st-"] {
-        font-family: \'Inter\', sans-serif;
+        font-family: 'Inter', sans-serif;
         color: #262626; /* Instagram-like dark grey */
     }
     .main { 
@@ -101,9 +101,9 @@ def overpass_query(city_name):
     out center tags;
     """
     try:
-        response = requests.get(overpass_url, params={\'data\': query}, timeout=90)
+        response = requests.get(overpass_url, params={'data': query}, timeout=90)
         if response.status_code == 200:
-            return response.json().get(\'elements\', [])
+            return response.json().get('elements', [])
         return []
     except Exception as e:
         return []
@@ -111,7 +111,7 @@ def overpass_query(city_name):
 def search_instagram_username(store_name, city):
     """Busca o username do Instagram no Google via raspagem leve."""
     query = f"{store_name} {city} instagram"
-    url = f"https://www.google.com/search?q={query.replace(\' \', \'+\')}"
+    url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
@@ -120,15 +120,15 @@ def search_instagram_username(store_name, city):
         time.sleep(random.uniform(1, 2))
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, \'html.parser\')
-            for a in soup.find_all(\'a\', href=True):
-                href = a[\'href\']
-                if \'instagram.com/\'' in href:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if 'instagram.com/' in href:
                     # Extrair o username
-                    match = re.search(r\'instagram\\.com/([^/?&]+)\\', href)
+                    match = re.search(r'instagram\.com/([^/?&]+)', href)
                     if match:
                         username = match.group(1)
-                        if username not in [\'reels\', \'stories\', \'explore\', \'p\', \'tags\']:
+                        if username not in ['reels', 'stories', 'explore', 'p', 'tags']:
                             return username
         return None
     except:
@@ -146,12 +146,12 @@ def get_instagram_data(username):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, \'html.parser\')
+            soup = BeautifulSoup(response.text, 'html.parser')
             meta_desc = soup.find("meta", property="og:description")
             if meta_desc:
                 content = meta_desc.get("content", "")
                 # Exemplo: "1,234 Followers, 567 Following, 89 Posts..."
-                followers_match = re.search(r\'([\\d.,KM]+)\\s*Followers\\', content)
+                followers_match = re.search(r'([\d.,KM]+)\s*Followers', content)
                 followers = followers_match.group(1) if followers_match else "N/A"
                 return f"@{username}", followers, content
         return f"@{username}", "N/A", "Perfil encontrado"
@@ -163,18 +163,18 @@ def get_instagram_data(username):
 def is_valid_store(name, tags):
     """Filtra para manter apenas lojas de moda feminina e excluir grandes redes."""
     name_lower = name.lower()
-    exclude = [\'renner\', \'c&a\', \'zara\', \'riachuelo\', \'marisa\', \'pernambucanas\', \'havan\', \'carrefour\', \'extra\', \'pão de açúcar\']
+    exclude = ['renner', 'c&a', 'zara', 'riachuelo', 'marisa', 'pernambucanas', 'havan', 'carrefour', 'extra', 'pão de açúcar']
     if any(x in name_lower for x in exclude):
         return False
     
     # Palavras-chave de moda feminina/boutique
-    keywords = [\'feminina\', \'boutique\', \'concept\', \'moda\', \'fashion\', \'estilo\', \'look\', \'vestuário\', \'multimarca\']
+    keywords = ['feminina', 'boutique', 'concept', 'moda', 'fashion', 'estilo', 'look', 'vestuário', 'multimarca']
     if any(k in name_lower for k in keywords):
         return True
     
     # Se não tiver palavra-chave, mas for shop=clothes/boutique, mantemos por precaução
-    shop_type = tags.get(\'shop\', \'\')
-    if shop_type in [\'boutique\', \'clothes\']:
+    shop_type = tags.get('shop', '')
+    if shop_type in ['boutique', 'clothes']:
         return True
         
     return False
@@ -192,7 +192,7 @@ with st.sidebar:
 
 if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
     if city_input:
-        cities = [c.strip() for c in city_input.split(\' , \') if c.strip()]
+        cities = [c.strip() for c in city_input.split(', ') if c.strip()]
         all_leads = []
         
         progress_bar = st.progress(0)
@@ -204,8 +204,8 @@ if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
             
             valid_stores = []
             for el in raw_elements:
-                tags = el.get(\'tags\', {})
-                name = tags.get(\'name\')
+                tags = el.get('tags', {})
+                name = tags.get('name')
                 if name and is_valid_store(name, tags):
                     valid_stores.append((name, tags))
             
@@ -223,8 +223,8 @@ if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
                     "Instagram": handle,
                     "Seguidores": followers,
                     "Bio": bio,
-                    "Telefone": tags.get(\'phone\') or tags.get(\'contact:phone\') or "N/A",
-                    "Endereço": f"{tags.get(\'addr:street\', \'\')}, {tags.get(\'addr:housenumber\', \'\')}".strip(\' , \') or "N/A"
+                    "Telefone": tags.get('phone') or tags.get('contact:phone') or "N/A",
+                    "Endereço": f"{tags.get('addr:street', '')}, {tags.get('addr:housenumber', '')}".strip(', ') or "N/A"
                 })
                 
             progress_bar.progress((idx + 1) / len(cities))
@@ -238,11 +238,11 @@ if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
             # Métricas com ícones
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.markdown(f"<div class=\'metric-card\'><h3>Total de Leads</h3><p>{len(df)}</p></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='metric-card'><h3>Total de Leads</h3><p>{len(df)}</p></div>", unsafe_allow_html=True)
             with col2:
-                st.markdown(f"<div class=\'metric-card\'><h3>Cidades Buscadas</h3><p>{len(cities)}</p></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='metric-card'><h3>Cidades Buscadas</h3><p>{len(cities)}</p></div>", unsafe_allow_html=True)
             with col3:
-                st.markdown(f"<div class=\'metric-card\'><h3>Com Instagram</h3><p>{len(df[df[\'Instagram\'] != \'N/A\'])}</p></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='metric-card'><h3>Com Instagram</h3><p>{len(df[df['Instagram'] != 'N/A'])}</p></div>", unsafe_allow_html=True)
 
             st.markdown("--- ")
             st.markdown("### ✨ Lojas Encontradas")
@@ -251,19 +251,19 @@ if st.sidebar.button("🚀 INICIAR PROSPECÇÃO"):
             for i, row in df.iterrows():
                 st.markdown(f"""
                 <div class="card">
-                    <h4>{row[\'Loja\']} - {row[\'Cidade\']}</h4>
-                    <p><b>Instagram:</b> <a href="https://instagram.com/{row[\'Instagram\'][1:]}" target="_blank">{row[\'Instagram\']}</a></p>
-                    <p><b>Seguidores:</b> {row[\'Seguidores\']}</p>
-                    <p><b>Bio:</b> {row[\'Bio\']}</p>
-                    <p><b>Telefone:</b> {row[\'Telefone\']}</p>
-                    <p><b>Endereço:</b> {row[\'Endereço\']}</p>
+                    <h4>{row['Loja']} - {row['Cidade']}</h4>
+                    <p><b>Instagram:</b> <a href="https://instagram.com/{row['Instagram'][1:]}" target="_blank">{row['Instagram']}</a></p>
+                    <p><b>Seguidores:</b> {row['Seguidores']}</p>
+                    <p><b>Bio:</b> {row['Bio']}</p>
+                    <p><b>Telefone:</b> {row['Telefone']}</p>
+                    <p><b>Endereço:</b> {row['Endereço']}</p>
                 </div>
                 """, unsafe_allow_html=True)
             
             # Download Excel
             output = BytesIO()
-            with pd.ExcelWriter(output, engine=\'openpyxl\') as writer:
-                df.to_excel(writer, index=False, sheet_name=\'Leads\')
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Leads')
             
             st.download_button(
                 label="📥 Baixar Planilha Excel (.xlsx)",
