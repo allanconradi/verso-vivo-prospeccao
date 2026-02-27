@@ -4,6 +4,7 @@ import requests
 import re
 import time
 import random
+import unicodedata
 from bs4 import BeautifulSoup
 from io import BytesIO
 from urllib.parse import quote_plus
@@ -146,6 +147,14 @@ header{visibility:hidden;}
 .stButton>button:hover{
   filter: brightness(0.95);
   transform: translateY(-1px);
+}
+
+/* garantir contraste mesmo em estados especiais */
+.stButton>button *{ color: inherit !important; opacity: 1 !important; }
+.stButton>button:disabled{
+  background: var(--vv-accent) !important;
+  color: #fff !important;
+  opacity: 0.70 !important;
 }
 
 /* Cards */
@@ -339,7 +348,10 @@ def maps_link(query: str) -> str:
 
 
 def normalize_text(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+    s = (s or "")
+    # remove acentos para melhorar match de palavras (café -> cafe, etc.)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", s).strip().lower()
 
 
 # -------------------------
@@ -619,6 +631,350 @@ def brasilapi_cnpj(cnpj_digits: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+
+# -------------------------
+# CNPJ.ws (pesquisa por CNAE + cidade e consulta detalhada)
+# -------------------------
+@st.cache_data(ttl=7 * 24 * 60 * 60, show_spinner=False)
+def ibge_municipios() -> List[Dict[str, Any]]:
+    """Carrega todos os municípios do IBGE (id + nome + UF). Cacheado."""
+    url = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios"
+    try:
+        r = SESSION.get(url, headers=HEADERS, timeout=30)
+        if r.status_code == 200:
+            return r.json()
+        return []
+    except Exception:
+        return []
+
+def parse_city_spec(spec: str) -> Tuple[str, Optional[str]]:
+    """Aceita: 'Curitiba/PR', 'Curitiba - PR', 'Curitiba, PR', 'Curitiba (PR)'"""
+    raw = (spec or "").strip()
+    if not raw:
+        return "", None
+    # remove parênteses
+    raw2 = re.sub(r"[()]", "", raw).strip()
+
+    uf = None
+    city = raw2
+
+    # formatos com separador
+    m = re.match(r"^(.*?)[/,-]\s*([A-Za-z]{2})\s*$", raw2)
+    if m:
+        city = m.group(1).strip()
+        uf = m.group(2).upper()
+    else:
+        # tenta 'Cidade UF'
+        parts = raw2.split()
+        if len(parts) >= 2 and len(parts[-1]) == 2 and parts[-1].isalpha():
+            uf = parts[-1].upper()
+            city = " ".join(parts[:-1]).strip()
+
+    return city, uf
+
+def resolve_city_ibge_ids(city_spec: str) -> Optional[Tuple[int, int, str, str]]:
+    """Retorna (cidade_id, estado_id, cidade_nome, uf_sigla)."""
+    city, uf = parse_city_spec(city_spec)
+    if not city:
+        return None
+
+    ncity = normalize_text(city)
+    matches: List[Tuple[int, int, str, str]] = []
+
+    for m in ibge_municipios():
+        nome = m.get("nome") or ""
+        if normalize_text(nome) != ncity:
+            continue
+        uf_obj = (((m.get("microrregiao") or {}).get("mesorregiao") or {}).get("UF") or {})
+        sigla = (uf_obj.get("sigla") or "").upper()
+        if uf and sigla and sigla != uf.upper():
+            continue
+        cidade_id = m.get("id")
+        estado_id = uf_obj.get("id")
+        if isinstance(cidade_id, int) and isinstance(estado_id, int) and sigla:
+            matches.append((cidade_id, estado_id, nome, sigla))
+
+    if not matches:
+        # fallback: contém (quando o usuário digita abreviações)
+        for m in ibge_municipios():
+            nome = m.get("nome") or ""
+            if ncity in normalize_text(nome):
+                uf_obj = (((m.get("microrregiao") or {}).get("mesorregiao") or {}).get("UF") or {})
+                sigla = (uf_obj.get("sigla") or "").upper()
+                if uf and sigla and sigla != uf.upper():
+                    continue
+                cidade_id = m.get("id")
+                estado_id = uf_obj.get("id")
+                if isinstance(cidade_id, int) and isinstance(estado_id, int) and sigla:
+                    matches.append((cidade_id, estado_id, nome, sigla))
+        # se achar várias, pega a primeira
+    return matches[0] if matches else None
+
+def cnpjws_pesquisa(
+    token: str,
+    cidade_id: int,
+    estado_id: int,
+    cnae_principal: str = "4781400",
+    pagina: int = 1,
+    limite: int = 100,
+) -> Optional[Dict[str, Any]]:
+    """Pesquisa CNPJs por cidade + CNAE principal. Requer token (CNPJ.ws)."""
+    urls = [
+        "https://comercial.cnpj.ws/pesquisa",
+        "https://comercial.cnpj.ws/v2/pesquisa",
+    ]
+    params = {
+        "atividade_principal_id": str(cnae_principal),
+        "cidade_id": str(cidade_id),
+        "estado_id": str(estado_id),
+        "pagina": str(pagina),
+        "limite": str(limite),
+    }
+    headers = dict(HEADERS)
+    headers["x_api_token"] = token
+
+    for u in urls:
+        try:
+            r = SESSION.get(u, headers=headers, params=params, timeout=30)
+            if r.status_code == 200:
+                return r.json()
+            # se endpoint não existir nesse plano/versão, tenta o próximo
+        except Exception:
+            continue
+    return None
+
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def cnpjws_consulta(cnpj: str, token: str) -> Optional[Dict[str, Any]]:
+    """Consulta completa por CNPJ (inclui QSA/sócios)."""
+    url = f"https://comercial.cnpj.ws/cnpj/{cnpj}"
+    headers = dict(HEADERS)
+    headers["x_api_token"] = token
+    try:
+        # seja gentil com rate-limit (mesmo em plano pago pode limitar depois do teto)
+        time.sleep(0.25)
+        r = SESSION.get(url, headers=headers, timeout=30)
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except Exception:
+        return None
+
+def socios_strings(socios: Any) -> Tuple[str, str]:
+    """Retorna (todos_socios, socios_administradores)"""
+    if not isinstance(socios, list) or not socios:
+        return "N/A", "N/A"
+    all_items = []
+    admins = []
+    for s in socios:
+        if not isinstance(s, dict):
+            continue
+        nome = (s.get("nome") or "").strip()
+        qual = ((s.get("qualificacao_socio") or {}).get("descricao") or "").strip()
+        item = nome if not qual else f"{nome} ({qual})"
+        if item:
+            all_items.append(item)
+        ql = qual.lower()
+        if any(k in ql for k in ["administr", "diretor", "gestor", "president"]):
+            if nome:
+                admins.append(nome)
+    return ("; ".join(all_items) or "N/A"), ("; ".join(admins) or "N/A")
+
+def cnpjws_to_row(data: Dict[str, Any], cidade_busca: str) -> Optional[Dict[str, Any]]:
+    """Mapeia resposta do CNPJ.ws para uma linha de planilha."""
+    est = data.get("estabelecimento") or {}
+    if not isinstance(est, dict):
+        return None
+
+    atv_principal = est.get("atividade_principal") or {}
+    cnae_id = str((atv_principal.get("id") or "")).strip()
+
+    # filtro estrito: CNAE principal deve ser 4781400
+    if cnae_id and cnae_id != "4781400":
+        return None
+
+    socios = data.get("socios") or []
+    socios_all, socios_admin = socios_strings(socios)
+
+    sec = est.get("atividades_secundarias") or []
+    sec_str = "; ".join(
+        [
+            f"{(x.get('id') or '').strip()} {(x.get('descricao') or '').strip()}".strip()
+            for x in sec
+            if isinstance(x, dict)
+        ]
+    ) or "N/A"
+
+    estado = est.get("estado") or {}
+    cidade = est.get("cidade") or {}
+
+    tel1 = ""
+    if (est.get("ddd1") or est.get("telefone1")):
+        tel1 = f"({est.get('ddd1') or ''}) {est.get('telefone1') or ''}".strip()
+    tel2 = ""
+    if (est.get("ddd2") or est.get("telefone2")):
+        tel2 = f"({est.get('ddd2') or ''}) {est.get('telefone2') or ''}".strip()
+    tel = "; ".join([t for t in [tel1, tel2] if t]) or "N/A"
+
+    return {
+        "Cidade (busca)": cidade_busca,
+        "CNPJ": est.get("cnpj") or "N/A",
+        "Razão Social": data.get("razao_social") or "N/A",
+        "Nome Fantasia": est.get("nome_fantasia") or "N/A",
+        "Abertura": est.get("data_inicio_atividade") or "N/A",
+        "Porte": (data.get("porte") or {}).get("descricao") if isinstance(data.get("porte"), dict) else data.get("porte") or "N/A",
+        "MEI": (data.get("simples") or {}).get("mei") if isinstance(data.get("simples"), dict) else "N/A",
+        "Simples": (data.get("simples") or {}).get("simples") if isinstance(data.get("simples"), dict) else "N/A",
+        "Capital Social": data.get("capital_social") or "N/A",
+        "Situação": est.get("situacao_cadastral") or "N/A",
+        "UF": estado.get("sigla") or "N/A",
+        "Município": cidade.get("nome") or "N/A",
+        "CEP": est.get("cep") or "N/A",
+        "Logradouro": " ".join([x for x in [est.get("tipo_logradouro"), est.get("logradouro")] if x]) or "N/A",
+        "Número": est.get("numero") or "N/A",
+        "Complemento": est.get("complemento") or "N/A",
+        "Bairro": est.get("bairro") or "N/A",
+        "Email": est.get("email") or "N/A",
+        "Telefone": tel,
+        "CNAE Principal": cnae_id or "N/A",
+        "CNAE Principal Desc": (atv_principal.get("descricao") or "N/A") if isinstance(atv_principal, dict) else "N/A",
+        "CNAEs Secundários": sec_str,
+        "Sócios (QSA)": socios_all,
+        "Sócio(s) administrador(es)": socios_admin,
+        "Status": "OK",
+    }
+
+def start_cnpj_run(cities: List[str], per_city_limit: int, token: str, batch_size: int = 2) -> None:
+    st.session_state.cnpj_rows = []
+    st.session_state.cnpj_df = pd.DataFrame()
+
+    j = st.session_state.cnpj_job
+    j.update(
+        {
+            "running": True,
+            "stop": False,
+            "cities": cities,
+            "limit": int(per_city_limit),
+            "batch_size": int(batch_size),
+            "city_idx": 0,
+            "city_spec": "",
+            "cidade_id": None,
+            "estado_id": None,
+            "city_page": 1,
+            "city_pool": [],
+            "city_pos": 0,
+            "city_seen": set(),
+            "city_ok": 0,
+            "ok_total": 0,
+            "attempt_total": 0,
+            "target_est": int(per_city_limit) * max(1, len(cities)),
+            "current": "",
+            "last_error": "",
+            "stopped_reason": "",
+            "token": token,
+            "cnae": "4781400",
+            "started_at": time.time(),
+        }
+    )
+
+def cnpj_step() -> None:
+    j = st.session_state.cnpj_job
+    if not j.get("running"):
+        return
+
+    token = (j.get("token") or "").strip()
+    if not token:
+        j["running"] = False
+        j["stopped_reason"] = "Sem token"
+        return
+
+    batch = int(j.get("batch_size", 2))
+    for _ in range(batch):
+        if j.get("stop"):
+            j["running"] = False
+            return
+
+        if j.get("city_idx", 0) >= len(j.get("cities", [])):
+            j["running"] = False
+            return
+
+        # inicializa cidade atual se mudou
+        city_spec = j["cities"][j["city_idx"]]
+        if j.get("city_spec") != city_spec:
+            j["city_spec"] = city_spec
+            j["city_page"] = 1
+            j["city_pool"] = []
+            j["city_pos"] = 0
+            j["city_seen"] = set()
+            j["city_ok"] = 0
+            ids = resolve_city_ibge_ids(city_spec)
+            if not ids:
+                j["last_error"] = f"Não encontrei a cidade no IBGE: {city_spec}. Use Cidade/UF."
+                # pula para próxima cidade
+                j["city_idx"] += 1
+                continue
+            cidade_id, estado_id, cidade_nome, uf_sigla = ids
+            j["cidade_id"] = cidade_id
+            j["estado_id"] = estado_id
+            j["current"] = f"{cidade_nome}/{uf_sigla} (CNAE 4781400)"
+
+        # se já atingiu limite da cidade, próxima
+        if int(j.get("city_ok", 0)) >= int(j.get("limit", 0)):
+            j["city_idx"] += 1
+            continue
+
+        # garante pool com CNPJs para esta cidade
+        if j.get("city_pos", 0) >= len(j.get("city_pool", [])):
+            payload = cnpjws_pesquisa(
+                token=token,
+                cidade_id=int(j["cidade_id"]),
+                estado_id=int(j["estado_id"]),
+                cnae_principal=str(j.get("cnae", "4781400")),
+                pagina=int(j.get("city_page", 1)),
+                limite=100,
+            )
+            j["city_page"] = int(j.get("city_page", 1)) + 1
+
+            cnpjs = []
+            if isinstance(payload, dict):
+                data_list = payload.get("data") or payload.get("cnpjs") or []
+                if isinstance(data_list, list):
+                    cnpjs = [safe_digits(x) for x in data_list if safe_digits(str(x))]
+            # remove duplicados
+            new_items = []
+            for c in cnpjs:
+                if len(c) == 14 and c not in j["city_seen"]:
+                    j["city_seen"].add(c)
+                    new_items.append(c)
+
+            if not new_items:
+                # sem mais resultados, vai para próxima cidade
+                j["city_idx"] += 1
+                continue
+
+            j["city_pool"].extend(new_items)
+
+        # pega próximo CNPJ e consulta
+        cnpj = j["city_pool"][j["city_pos"]]
+        j["city_pos"] += 1
+        j["attempt_total"] = int(j.get("attempt_total", 0)) + 1
+        j["current"] = f"{j.get('current','')} • consultando {cnpj}"
+
+        data = cnpjws_consulta(cnpj, token)
+        if not data:
+            continue
+
+        row = cnpjws_to_row(data, cidade_busca=j.get("city_spec",""))
+        if not row:
+            # CNAE principal não bateu (ou dado incompleto)
+            continue
+
+        st.session_state.cnpj_rows.append(row)
+        j["city_ok"] = int(j.get("city_ok", 0)) + 1
+        j["ok_total"] = int(j.get("ok_total", 0)) + 1
+
+        # atualiza DF
+        st.session_state.cnpj_df = pd.DataFrame(st.session_state.cnpj_rows)
+
 def flatten_cnaes(data: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
     # BrasilAPI costuma trazer cnae_fiscal e lista cnaes_secundarios com código/descricao
     cnae_main = None
@@ -694,6 +1050,66 @@ if "leads_df" not in st.session_state:
 if "cnpj_df" not in st.session_state:
     st.session_state.cnpj_df = None
 
+# --- Streaming / controle de execução (para mostrar resultados em tempo real + permitir parar) ---
+if "leads_rows" not in st.session_state:
+    st.session_state.leads_rows = []
+
+if "prospect" not in st.session_state:
+    st.session_state.prospect = {
+        "running": False,
+        "stop": False,
+        "cities": [],
+        "limit": 0,
+        "city_idx": 0,
+        "store_idx": 0,
+        "valid": [],
+        "current_city": "",
+        "current_name": "",
+        "city_total": 0,
+        "done": 0,
+        "target_est": 0,
+        "started_at": 0.0,
+        "enrich_address": True,
+        "enrich_instagram": True,
+        "use_ddg": True,
+        "use_bing": True,
+        "batch_size": 2,
+        "last_error": "",
+        "stopped_reason": "",
+    }
+
+
+# --- Streaming / controle de execução (CNPJ por cidade/CNAE) ---
+if "cnpj_rows" not in st.session_state:
+    st.session_state.cnpj_rows = []
+
+if "cnpj_job" not in st.session_state:
+    st.session_state.cnpj_job = {
+        "running": False,
+        "stop": False,
+        "cities": [],
+        "limit": 80,
+        "batch_size": 2,
+        "city_idx": 0,
+        "city_spec": "",
+        "cidade_id": None,
+        "estado_id": None,
+        "city_page": 1,
+        "city_pool": [],
+        "city_pos": 0,
+        "city_seen": set(),
+        "city_ok": 0,
+        "ok_total": 0,
+        "attempt_total": 0,
+        "target_est": 0,
+        "current": "",
+        "last_error": "",
+        "stopped_reason": "",
+        "token": "",
+        "cnae": "4781400",
+        "started_at": 0.0,
+    }
+
 with col_panel:
     st.markdown('<div class="vv-panel-sticky">', unsafe_allow_html=True)
 
@@ -734,28 +1150,63 @@ with col_panel:
 
         st.markdown('<hr class="vv-hr"/>', unsafe_allow_html=True)
 
-        start = st.button("🚀 Iniciar prospecção")
+        # Execução em tempo real: mostra resultados conforme coleta e permite interromper
+        is_running = st.session_state.prospect.get("running", False)
+        batch_size = st.slider("Atualização em tempo real (itens por passo)", 1, 5, st.session_state.prospect.get("batch_size", 2))
+        st.session_state.prospect["batch_size"] = batch_size
+
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            start = st.button("🚀 Iniciar", disabled=is_running)
+        with col_btn2:
+            stop = st.button("⏹ Parar", disabled=not is_running)
+
+        if stop:
+            st.session_state.prospect["stop"] = True
+            st.session_state.prospect["running"] = False
+            st.session_state.prospect["stopped_reason"] = "Interrompido manualmente"
+
 
         st.markdown('</div>', unsafe_allow_html=True)
 
     else:
-        st.markdown('<div class="vv-note">Aqui você gera planilhas de empresas a partir de <b>CNPJ</b>. Você pode colar CNPJs ou subir um CSV/XLSX exportado de plataformas que você tem acesso.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="vv-note"><b>Busca de empresas por cidade + CNAE</b> (sem você ter o CNPJ). Fonte: <b>CNPJ.ws</b> (pesquisa por CNAE + cidade).<br><span class="vv-muted">Para pesquisar por cidade/CNAE você precisa do token do plano que libera o endpoint de pesquisa. Depois o app consulta os detalhes (inclui quadro societário).</span></div>', unsafe_allow_html=True)
 
-        cnpj_text = st.text_area(
-            "Cole CNPJs (um por linha)",
-            placeholder="Ex:\n12.345.678/0001-90\n00.394.460/0058-87",
-            height=120,
+        cnpj_cities_input = st.text_area(
+            "Cidades (uma por linha ou separadas por vírgula). Dica: use Cidade/UF para evitar ambiguidade.",
+            placeholder="Ex:\nCuritiba/PR\nFlorianópolis/SC\nSão Paulo/SP",
+            height=110,
         )
 
-        up = st.file_uploader("Ou envie CSV/XLSX com uma coluna de CNPJ", type=["csv", "xlsx"])
+        cnpj_limit = st.slider("Limite de empresas por cidade (CNAE 4781-4/00)", 10, 500, st.session_state.cnpj_job.get("limit", 80), step=10)
+        st.session_state.cnpj_job["limit"] = cnpj_limit
 
-        allow_cnae = st.text_input(
-            "CNAEs permitidos (somente dígitos, separados por vírgula)",
-            value="4781400",
-            help="Padrão: 4781400 (Comércio varejista de artigos do vestuário e acessórios).",
+        cnpj_token = st.text_input(
+            "Token CNPJ.ws (necessário para pesquisa)",
+            type="password",
+            help="A busca por cidade/CNAE usa o endpoint /pesquisa da CNPJ.ws (Plano Premium). Se você não tiver token, ainda dá para usar a seção Prospecção (Lojas) e/ou enriquecer com CNPJs que você já possui.",
         )
 
-        run_cnpj = st.button("🔎 Enriquecer CNPJs")
+        st.text_input("CNAE alvo (fixo)", value="4781400 (Comércio varejista de artigos do vestuário e acessórios)", disabled=True)
+
+        is_running_cnpj = st.session_state.cnpj_job.get("running", False)
+        cnpj_batch = st.slider("Atualização em tempo real (empresas por passo)", 1, 5, st.session_state.cnpj_job.get("batch_size", 2))
+        st.session_state.cnpj_job["batch_size"] = cnpj_batch
+
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            start_cnpj = st.button("🔎 Buscar empresas", disabled=is_running_cnpj or (not cnpj_token.strip()))
+        with col_btn2:
+            stop_cnpj = st.button("⏹ Parar", disabled=not is_running_cnpj)
+
+        if stop_cnpj:
+            st.session_state.cnpj_job["stop"] = True
+            st.session_state.cnpj_job["running"] = False
+            st.session_state.cnpj_job["stopped_reason"] = "Interrompido manualmente"
+
+        # guarda token em state (não exibimos depois)
+        if cnpj_token.strip():
+            st.session_state.cnpj_job["token"] = cnpj_token.strip()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -805,6 +1256,144 @@ def build_lead_row(city: str, name: str, tags: Dict[str, Any], lat: Optional[flo
         "Latitude": lat,
         "Longitude": lon,
     }
+
+
+
+# -------------------------
+# Execução incremental (streaming) — mostra resultados enquanto coleta
+# -------------------------
+def start_prospect_run(
+    cities: List[str],
+    limit: int,
+    enrich_address: bool,
+    enrich_instagram: bool,
+    use_ddg: bool,
+    use_bing: bool,
+    batch_size: int,
+):
+    # limpa resultados anteriores
+    st.session_state.leads_rows = []
+    st.session_state.leads_df = pd.DataFrame()
+
+    p = st.session_state.prospect
+    p.update({
+        "running": True,
+        "stop": False,
+        "cities": cities,
+        "limit": int(limit),
+        "city_idx": 0,
+        "store_idx": 0,
+        "valid": [],
+        "current_city": "",
+        "current_name": "",
+        "city_total": 0,
+        "done": 0,
+        "target_est": max(1, len(cities) * int(limit)),
+        "started_at": time.time(),
+        "enrich_address": bool(enrich_address),
+        "enrich_instagram": bool(enrich_instagram),
+        "use_ddg": bool(use_ddg),
+        "use_bing": bool(use_bing),
+        "batch_size": int(batch_size) if batch_size else 1,
+        "last_error": "",
+        "stopped_reason": "",
+    })
+
+
+def _init_city_in_state(p: Dict[str, Any]) -> None:
+    # prepara lista de lojas válidas para a cidade atual
+    city = p["cities"][p["city_idx"]]
+    p["current_city"] = city
+    p["current_name"] = "carregando..."
+    elements = overpass_query(city)
+
+    valid = []
+    for el in elements:
+        tags = el.get("tags") or {}
+        name = tags.get("name")
+        if not name:
+            continue
+        if is_valid_store(name, tags):
+            valid.append(el)
+
+    valid = valid[: p["limit"]]
+    p["valid"] = valid
+    p["store_idx"] = 0
+    p["city_total"] = len(valid)
+
+
+def prospect_step() -> None:
+    """Processa poucos itens por execução para permitir:
+    - renderizar resultados em tempo real
+    - clicar em Parar sem travar
+    """
+    p = st.session_state.prospect
+    if not p.get("running"):
+        return
+    if p.get("stop"):
+        p["running"] = False
+        if not p.get("stopped_reason"):
+            p["stopped_reason"] = "Interrompido"
+        return
+
+    try:
+        batch = max(1, int(p.get("batch_size", 1)))
+        for _ in range(batch):
+            if p.get("stop"):
+                break
+
+            # acabou tudo
+            if p["city_idx"] >= len(p["cities"]):
+                p["running"] = False
+                p["stopped_reason"] = p.get("stopped_reason") or "Concluída"
+                return
+
+            # iniciar cidade se necessário
+            if not p.get("valid"):
+                _init_city_in_state(p)
+                # se não achou nada, pula cidade
+                if p.get("city_total", 0) == 0:
+                    p["city_idx"] += 1
+                    p["valid"] = []
+                    continue
+
+            # terminou cidade
+            if p["store_idx"] >= p["city_total"]:
+                p["city_idx"] += 1
+                p["valid"] = []
+                continue
+
+            el = p["valid"][p["store_idx"]]
+            tags = el.get("tags") or {}
+            name = tags.get("name") or "N/A"
+            lat, lon = extract_lat_lon(el)
+
+            p["current_name"] = name
+
+            row = build_lead_row(
+                city=p["current_city"],
+                name=name,
+                tags=tags,
+                lat=lat,
+                lon=lon,
+                enrich_address=p["enrich_address"],
+                enrich_instagram=p["enrich_instagram"],
+                use_ddg=p["use_ddg"],
+                use_bing=p["use_bing"],
+            )
+            st.session_state.leads_rows.append(row)
+
+            p["store_idx"] += 1
+            p["done"] += 1
+
+        # atualiza DF parcial
+        if st.session_state.leads_rows:
+            st.session_state.leads_df = pd.DataFrame(st.session_state.leads_rows)
+
+    except Exception as e:
+        p["last_error"] = str(e)
+        p["running"] = False
+        p["stopped_reason"] = "Erro durante execução"
 
 
 def run_prospect(cities: List[str], limit: int, enrich_address: bool, enrich_instagram: bool, use_ddg: bool, use_bing: bool) -> pd.DataFrame:
@@ -946,27 +1535,59 @@ with col_main:
     if tab == "Prospecção (Lojas)":
         st.markdown("## Sua ferramenta para encontrar lojistas multimarcas")
 
-        # Rodar
+        # Rodar (streaming + possibilidade de parar)
+        p = st.session_state.prospect
+
         if "start" in locals() and start:
             cities = parse_cities(cities_input)
             if not cities:
                 st.warning("Digite pelo menos uma cidade.")
             else:
-                df = run_prospect(
+                # inicia execução incremental
+                start_prospect_run(
                     cities=cities,
                     limit=limit,
                     enrich_address=enrich_address,
                     enrich_instagram=enrich_instagram,
                     use_ddg=use_ddg,
                     use_bing=use_bing,
+                    batch_size=batch_size if "batch_size" in locals() else 2,
                 )
-                st.session_state.leads_df = df
+                st.rerun()
+
+        # processa um passo por execução (para exibir resultados antes de terminar tudo)
+        if p.get("running"):
+            prospect_step()
 
         df = st.session_state.leads_df
+        running = bool(p.get("running"))
+
+        # Status em tempo real (para você decidir parar cedo se estiver vindo muito N/A)
+        if running:
+            prog = min(1.0, float(p.get("done", 0)) / max(1.0, float(p.get("target_est", 1))))
+            st.progress(prog)
+            city_total = int(p.get("city_total") or 0)
+            city_total = city_total if city_total > 0 else 1
+            st.markdown(f"**[{p.get('current_city','')}]** {p.get('current_name','')}  \\n({min(int(p.get('store_idx',0)), city_total)}/{city_total})")
+            st.caption("Se você notar muitos campos N/A, clique em **Parar** no painel para interromper e ajustar.")
+            if p.get("last_error"):
+                st.error(p.get("last_error"))
+        else:
+            # Mensagem pós-execução
+            if p.get("stopped_reason") and p.get("cities"):
+                if p.get("stopped_reason") == "Concluída":
+                    st.success("✅ Prospecção concluída!")
+                else:
+                    st.warning(f"⏹ {p.get('stopped_reason')}")
+
+
         if df is None:
             st.info("Configure as cidades no painel à direita e clique em **Iniciar prospecção**.")
         elif df.empty:
-            st.warning("Nenhuma loja encontrada com os filtros atuais.")
+            if running:
+                st.info("Coletando resultados… assim que entrar o primeiro lead ele aparece aqui.")
+            else:
+                st.warning("Nenhuma loja encontrada com os filtros atuais.")
         else:
             total = len(df)
             with_insta = int((df["Instagram"] != "N/A").sum())
@@ -985,9 +1606,19 @@ with col_main:
 """,
                 unsafe_allow_html=True,
             )
+            # Visão rápida durante execução (para você notar N/A cedo)
+            if running:
+                st.dataframe(df.tail(50), use_container_width=True, hide_index=True)
+                st.caption("Mostrando os 50 últimos resultados coletados (atualiza em tempo real).")
+                st.markdown("<hr class='vv-hr'/>", unsafe_allow_html=True)
+
+
 
             # Render cards
-            for _, r in df.iterrows():
+            # Durante a execução, renderiza só os últimos itens (evita ficar pesado e garante atualização rápida).
+            iter_df = df.tail(12) if running else df
+
+            for _, r in iter_df.iterrows():
                 loja = str(r["Loja"])
                 cidade = str(r["Cidade"])
                 insta = str(r["Instagram"])
@@ -1033,59 +1664,76 @@ with col_main:
                     unsafe_allow_html=True,
                 )
 
-            # Download
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Leads")
+            if not running:
+                # Download
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    df.to_excel(writer, index=False, sheet_name="Leads")
 
-            st.download_button(
-                "📥 Baixar Planilha Excel (.xlsx)",
-                data=output.getvalue(),
-                file_name="leads_verso_vivo.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+                st.download_button(
+                    "📥 Baixar Planilha Excel (.xlsx)",
+                    data=output.getvalue(),
+                    file_name="leads_verso_vivo.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            else:
+                st.caption("Download será liberado ao concluir ou ao parar a prospecção.")
+
+
+        # Continua rodando automaticamente (1–5 itens por passo) para atualizar o feed em tempo real.
+        # Assim você consegue interromper cedo se perceber muitos N/A.
+        if st.session_state.prospect.get("running"):
+            time.sleep(0.25)
+            st.rerun()
 
     else:
-        st.markdown("## Enriquecimento de empresas por CNPJ")
-        st.caption("Fonte: BrasilAPI (consulta por CNPJ). Você fornece os CNPJs (colando ou subindo um arquivo exportado).")
+        st.markdown("## Enriquecimento por cidade + CNAE (CNPJ + cadastro completo)")
+        st.caption("Fonte: CNPJ.ws (pesquisa por CNAE + cidade) + consulta detalhada (inclui quadro societário).")
 
-        if "run_cnpj" in locals() and run_cnpj:
-            allow = {safe_digits(x) for x in allow_cnae.split(",") if safe_digits(x)}
-            if not allow:
-                allow = set(DEFAULT_CNAE_ALLOW)
+        j = st.session_state.cnpj_job
 
-            cnpjs = []
-            if cnpj_text.strip():
-                for line in re.split(r"[,\n;]+", cnpj_text):
-                    d = safe_digits(line)
-                    if len(d) == 14:
-                        cnpjs.append(d)
-            if up is not None:
-                cnpjs.extend(load_cnpj_from_upload(up))
-
-            # dedup
-            seen = set()
-            cnpjs = [c for c in cnpjs if not (c in seen or seen.add(c))]
-
-            if not cnpjs:
-                st.warning("Informe ao menos um CNPJ válido (14 dígitos).")
+        # iniciar
+        if "start_cnpj" in locals() and start_cnpj:
+            token = j.get("token", "").strip()
+            cities = parse_cities(cnpj_cities_input if "cnpj_cities_input" in locals() else "")
+            if not cities:
+                st.warning("Digite pelo menos uma cidade.")
+            elif not token:
+                st.warning("Informe o token do CNPJ.ws para habilitar a pesquisa por cidade/CNAE.")
             else:
-                dfc = enrich_cnpjs(cnpjs, allow)
-                st.session_state.cnpj_df = dfc
+                start_cnpj_run(cities=cities, per_city_limit=int(j.get("limit", 80)), token=token, batch_size=int(j.get("batch_size", 2)))
+                st.rerun()
+
+        # processa passo incremental
+        if j.get("running"):
+            cnpj_step()
 
         dfc = st.session_state.cnpj_df
-        if dfc is None:
-            st.info("Cole CNPJs ou envie um arquivo no painel à direita e clique em **Enriquecer CNPJs**.")
-        else:
-            st.dataframe(dfc, use_container_width=True, hide_index=True)
+        running = bool(j.get("running"))
 
+        # status / progresso
+        if running:
+            prog = min(1.0, float(j.get("ok_total", 0)) / max(1.0, float(j.get("target_est", 1))))
+            st.progress(prog)
+            st.markdown(f"**Processando:** {j.get('current','')}  \n**OK:** {j.get('ok_total',0)} / ~{j.get('target_est',0)}  \n**Tentativas:** {j.get('attempt_total',0)}")
+
+        if dfc is None or dfc.empty:
+            if running:
+                st.info("Coletando empresas… os resultados vão aparecer aqui em tempo real.")
+            else:
+                st.info("Configure as cidades e o token no painel à direita e clique em **Buscar empresas**.")
+        else:
+            st.dataframe(dfc.tail(500), use_container_width=True, hide_index=True)
             out = BytesIO()
             with pd.ExcelWriter(out, engine="openpyxl") as writer:
-                dfc.to_excel(writer, index=False, sheet_name="CNPJs")
-
+                dfc.to_excel(writer, index=False, sheet_name="Empresas")
             st.download_button(
-                "📥 Baixar Planilha CNPJ (.xlsx)",
+                "📥 Baixar Planilha Empresas (.xlsx)",
                 data=out.getvalue(),
-                file_name="cnpjs_verso_vivo.xlsx",
+                file_name="empresas_cnae_4781400.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+        if running:
+            time.sleep(0.25)
+            st.rerun()
