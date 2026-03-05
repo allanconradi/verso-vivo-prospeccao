@@ -1,3 +1,13 @@
+"""
+Verso Sourcing Pro — v3
+Streamlit Cloud ready.
+
+Secrets (Streamlit Cloud > App Settings > Secrets):
+  ANTHROPIC_API_KEY = "sk-ant-..."
+  META_USER_TOKEN_LONG = "EAASx..."
+  GOOGLE_PLACES_KEY = "AIza..."
+  IG_USER_ID = "17841473844567187"
+"""
 
 import streamlit as st
 import pandas as pd
@@ -175,17 +185,24 @@ def addr_from_nominatim(data):
 # 17:bairro 18:cep 19:uf 20:municipio(cod) 21:ddd1 22:telefone1
 # 23:ddd2 24:telefone2 25:ddd_fax 26:fax 27:email 28:situacao_especial 29:data_situacao_especial
 
-RF_BASE_URL = "https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj"
+RF_BASE_URL = "https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_rf_latest_folder() -> str:
-    """Descobre a pasta mais recente nos dados abertos da Receita Federal."""
-    try:
-        r = SESSION.get(RF_BASE_URL + "/", headers=HEADERS, timeout=20)
-        folders = re.findall(r'href="(\d{4}-\d{2})/"', r.text)
-        return sorted(folders)[-1] if folders else "2025-01"
-    except:
-        return "2025-01"
+    """Descobre a pasta mais recente tentando meses em ordem decrescente."""
+    import datetime
+    now = datetime.datetime.now()
+    for delta in range(6):
+        d = now - datetime.timedelta(days=delta * 30)
+        folder = d.strftime("%Y-%m")
+        try:
+            url = f"{RF_BASE_URL}/{folder}/Municipios.zip"
+            r = SESSION.head(url, headers=HEADERS, timeout=10)
+            if r.status_code == 200:
+                return folder
+        except:
+            continue
+    return "2025-05"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_municipios_rf() -> Dict[str, str]:
