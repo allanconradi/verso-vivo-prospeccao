@@ -711,6 +711,7 @@ with tab2:
             if st.button("⏹ Parar", key="cnpj_stop", disabled=not j["running"]): j["stop"] = True
 
     # ── Iniciar job ───────────────────────────────────────────────────────────
+    
     if st.button("🔍 Debug Nuvem Fiscal", key="debug_nf"):
     st.write("**1. Testando token...**")
     token = nuvem_fiscal_token()
