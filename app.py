@@ -711,7 +711,6 @@ with tab2:
             if st.button("⏹ Parar", key="cnpj_stop", disabled=not j["running"]): j["stop"] = True
 
     # ── Iniciar job ───────────────────────────────────────────────────────────
-        
     if start_cnpj:
         city_list = [c.strip() for c in re.split(r"[,\n;]+", cnpj_cities) if c.strip()]
         if not city_list:
@@ -743,43 +742,29 @@ with tab2:
                     "enrich_socios": enrich_cnpj_socios,
                 })
                 st.rerun()
+
     with col_main2:
         # DEBUG TEMPORÁRIO — remova depois
         if st.button("🔍 Debug Nuvem Fiscal", key="debug_nf"):
             st.write("**1. Testando token...**")
-            token = nuvem_fiscal_token()
-            st.write(f"Token: `{token[:30]}...`" if token else "❌ Token None")
-            
-            if token:
+            token_debug = nuvem_fiscal_token()
+            st.write(f"Token: `{token_debug[:30]}...`" if token_debug else "❌ Token None — falha na autenticação")
+            if token_debug:
                 st.write("**2. Código IBGE São Paulo...**")
-                codigo = ibge_municipio_code("São Paulo")
-                st.write(f"Código IBGE: `{codigo}`")
-                
-                if codigo:
+                codigo_debug = ibge_municipio_code("São Paulo")
+                st.write(f"Código IBGE: `{codigo_debug}`")
+                if codigo_debug:
                     st.write("**3. Chamando Nuvem Fiscal...**")
-                    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-                    r = SESSION.get(
+                    headers_debug = {"Authorization": f"Bearer {token_debug}", "Accept": "application/json"}
+                    r_debug = SESSION.get(
                         "https://api.nuvemfiscal.com.br/cnpj",
-                        headers=headers,
-                        params={"cnae_principal":"4781400","municipio":codigo,"natureza_juridica":"2135","$top":5},
+                        headers=headers_debug,
+                        params={"cnae_principal": "4781400", "municipio": codigo_debug, "natureza_juridica": "2135", "$top": 5},
                         timeout=30
                     )
-                    st.write(f"Status HTTP: `{r.status_code}`")
-                    st.json(r.json())
+                    st.write(f"Status HTTP: `{r_debug.status_code}`")
+                    st.json(r_debug.json())
 
-        j = st.session_state.cnpj_job  # linha que já existia
-                headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-                r = SESSION.get(
-                    "https://api.nuvemfiscal.com.br/cnpj",
-                    headers=headers,
-                    params={"cnae_principal":"4781400","municipio":codigo,"natureza_juridica":"2135","$top":5},
-                    timeout=30
-                )
-                st.write(f"Status HTTP: `{r.status_code}`")
-                st.json(r.json())
-
-    j = st.session_state.cnpj_job  # linha que já existia
-    
         j = st.session_state.cnpj_job
 
         # ── Enriquecimento incremental (Google + Instagram + Sócios) ──────────
