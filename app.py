@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -312,51 +311,53 @@ def ibge_municipio_code(cidade: str, uf: str = "") -> Optional[str]:
     except: return None
 
 def nuvem_fiscal_listar_empresas(cidade: str, cnae: str = "4781400", limite: int = 100) -> List[Dict]:
-    """Lista empresas ativas por cidade + CNAE via Nuvem Fiscal."""
+    """Lista empresas por cidade + CNAE via Nuvem Fiscal.
+    Natureza jurídica: buscamos os tipos mais comuns de comércio varejista.
+    Docs: GET /cnpj?cnae_principal=&municipio=&natureza_juridica=
+    """
     token = nuvem_fiscal_token()
     if not token: return []
 
-    # descobre código IBGE
-    # cidade pode vir como "Lapa, São Paulo" — pega só a primeira parte como bairro/cidade
+    # Resolve código IBGE — cidade pode vir como "Lapa, São Paulo"
     partes = [p.strip() for p in cidade.split(",")]
     nome_municipio = partes[-1] if len(partes) > 1 else partes[0]
-    codigo_ibge = ibge_municipio_code(nome_municipio)
-    if not codigo_ibge:
-        # tenta sem normalização extra (alguns municípios têm nome composto)
-        codigo_ibge = ibge_municipio_code(cidade)
+    codigo_ibge = ibge_municipio_code(nome_municipio) or ibge_municipio_code(cidade)
     if not codigo_ibge: return []
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    resultados = []
-    top = min(50, limite)  # Nuvem Fiscal aceita max 50 por página
-    skip = 0
 
-    while len(resultados) < limite:
-        try:
-            r = SESSION.get(
-                "https://api.nuvemfiscal.com.br/cnpj/estabelecimentos",
-                headers=headers,
-                params={
-                    "cnae_principal": cnae,
-                    "codigo_municipio_ibge": codigo_ibge,
-                    "situacao_cadastral": "ATIVA",
-                    "$top": top,
-                    "$skip": skip,
-                    "$orderby": "data_inicio_atividade desc",
-                },
-                timeout=30
-            )
-            if not r.ok: break
-            data = r.json()
-            items = data.get("data") or data.get("items") or data.get("estabelecimentos") or []
-            if not items: break
-            resultados.extend(items)
-            # paginação
-            total = data.get("count") or data.get("total") or 0
-            skip += top
-            if skip >= total or skip >= limite: break
-            time.sleep(0.3)
-        except: break
+    # Naturezas jurídicas mais comuns para comércio varejista (MEI, LTDA, EIRELI, SLU, SA)
+    naturezas = ["2135", "2062", "2054", "2046", "2232"]
+    resultados = []
+    top = 50  # máximo por página
+
+    for nat in naturezas:
+        if len(resultados) >= limite: break
+        skip = 0
+        while len(resultados) < limite:
+            try:
+                r = SESSION.get(
+                    "https://api.nuvemfiscal.com.br/cnpj",
+                    headers=headers,
+                    params={
+                        "cnae_principal": cnae,
+                        "municipio": codigo_ibge,
+                        "natureza_juridica": nat,
+                        "$top": top,
+                        "$skip": skip,
+                    },
+                    timeout=30
+                )
+                if not r.ok: break
+                data = r.json()
+                items = data.get("data") or []
+                if not items: break
+                resultados.extend(items)
+                skip += top
+                # se retornou menos que o pedido, acabou a página
+                if len(items) < top: break
+                time.sleep(0.3)
+            except: break
 
     return resultados[:limite]
 
@@ -601,7 +602,10 @@ with tab1:
             st.progress(min(1.0, p["done"] / max(1, p["target_est"])))
             st.caption(f"**[{p['current_city']}]** {p['current_name']}  ({min(p['store_idx'], p['city_total'])}/{p['city_total']})")
         elif p.get("stopped_reason") and p.get("cities"):
-            st.success("✅ Concluída!") if p["stopped_reason"] == "Concluída" else st.warning(f"⏹ {p['stopped_reason']}")
+            if p["stopped_reason"] == "Concluída":
+                st.success("✅ Concluída!")
+            else:
+                st.warning(f"⏹ {p['stopped_reason']}")
 
         df = st.session_state.leads_df
         if df is None or (hasattr(df,"empty") and df.empty):
@@ -803,7 +807,10 @@ with tab2:
             st.caption(f"**Enriquecendo:** {j['current']}  ({j['idx']}/{j['target_est']})")
             st.caption("Buscando sócios, telefone, site e Instagram para cada empresa…")
         elif j.get("stopped_reason") and j.get("items"):
-            st.success("✅ Concluído!") if j["stopped_reason"] == "Concluída" else st.warning(f"⏹ {j['stopped_reason']}")
+            if j["stopped_reason"] == "Concluída":
+                st.success("✅ Concluído!")
+            else:
+                st.warning(f"⏹ {j['stopped_reason']}")
 
         # ── Resultados ────────────────────────────────────────────────────────
         dfc = st.session_state.cnpj_df
