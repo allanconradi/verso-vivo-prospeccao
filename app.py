@@ -60,6 +60,8 @@ ANTHROPIC_KEY   = secret("ANTHROPIC_API_KEY")
 META_TOKEN      = secret("META_USER_TOKEN_LONG")
 GOOGLE_KEY      = secret("GOOGLE_PLACES_KEY")
 IG_USER_ID      = secret("IG_USER_ID") or "17841473844567187"
+NF_CLIENT_ID    = secret("NUVEM_FISCAL_CLIENT_ID")
+NF_CLIENT_SECRET= secret("NUVEM_FISCAL_CLIENT_SECRET")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 SESSION = requests.Session()
@@ -275,6 +277,132 @@ def meta_business_discovery(username: str, token: Optional[str] = None) -> dict:
            "website": bd.get("website","N/A")}
     cache[u] = out
     return out
+
+# ── Nuvem Fiscal ─────────────────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def nuvem_fiscal_token() -> Optional[str]:
+    if not NF_CLIENT_ID or not NF_CLIENT_SECRET: return None
+    try:
+        r = SESSION.post(
+            "https://auth.nuvemfiscal.com.br/oauth/token",
+            data={"grant_type":"client_credentials","client_id":NF_CLIENT_ID,
+                  "client_secret":NF_CLIENT_SECRET,"scope":"cnpj"},
+            timeout=15
+        )
+        return r.json().get("access_token") if r.ok else None
+    except: return None
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def ibge_municipio_code(cidade: str, uf: str = "") -> Optional[str]:
+    """Converte nome de cidade para código IBGE via API do IBGE."""
+    try:
+        r = SESSION.get("https://servicodados.ibge.gov.br/api/v1/localidades/municipios",
+                        timeout=15)
+        if not r.ok: return None
+        municipios = r.json()
+        cidade_norm = norm(cidade.split(",")[0].strip())
+        uf_norm = norm(uf.strip()) if uf else None
+        for m in municipios:
+            nome = norm(m.get("nome",""))
+            sigla = norm(m.get("microrregiao",{}).get("mesorregiao",{}).get("UF",{}).get("sigla",""))
+            if nome == cidade_norm:
+                if not uf_norm or sigla == uf_norm:
+                    return str(m.get("id",""))
+        return None
+    except: return None
+
+def nuvem_fiscal_listar_empresas(cidade: str, cnae: str = "4781400", limite: int = 100) -> List[Dict]:
+    """Lista empresas ativas por cidade + CNAE via Nuvem Fiscal."""
+    token = nuvem_fiscal_token()
+    if not token: return []
+
+    # descobre código IBGE
+    # cidade pode vir como "Lapa, São Paulo" — pega só a primeira parte como bairro/cidade
+    partes = [p.strip() for p in cidade.split(",")]
+    nome_municipio = partes[-1] if len(partes) > 1 else partes[0]
+    codigo_ibge = ibge_municipio_code(nome_municipio)
+    if not codigo_ibge:
+        # tenta sem normalização extra (alguns municípios têm nome composto)
+        codigo_ibge = ibge_municipio_code(cidade)
+    if not codigo_ibge: return []
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    resultados = []
+    top = min(50, limite)  # Nuvem Fiscal aceita max 50 por página
+    skip = 0
+
+    while len(resultados) < limite:
+        try:
+            r = SESSION.get(
+                "https://api.nuvemfiscal.com.br/cnpj/estabelecimentos",
+                headers=headers,
+                params={
+                    "cnae_principal": cnae,
+                    "codigo_municipio_ibge": codigo_ibge,
+                    "situacao_cadastral": "ATIVA",
+                    "$top": top,
+                    "$skip": skip,
+                    "$orderby": "data_inicio_atividade desc",
+                },
+                timeout=30
+            )
+            if not r.ok: break
+            data = r.json()
+            items = data.get("data") or data.get("items") or data.get("estabelecimentos") or []
+            if not items: break
+            resultados.extend(items)
+            # paginação
+            total = data.get("count") or data.get("total") or 0
+            skip += top
+            if skip >= total or skip >= limite: break
+            time.sleep(0.3)
+        except: break
+
+    return resultados[:limite]
+
+def nuvem_fiscal_to_row(item: Dict) -> Dict:
+    """Converte um item da Nuvem Fiscal para o formato de linha do app."""
+    cnpj_basico = item.get("cnpj_basico","")
+    cnpj_ordem  = item.get("cnpj_ordem","0001")
+    cnpj_dv     = item.get("cnpj_digito_verificador","")
+    cnpj_full   = f"{cnpj_basico}{cnpj_ordem}{cnpj_dv}".replace(".","").replace("/","").replace("-","")
+
+    endereco = item.get("endereco") or {}
+    nome_fantasia = item.get("nome_fantasia") or ""
+    razao = item.get("razao_social") or ""
+
+    cnaes_sec = item.get("cnaes_secundarios") or []
+    cnaes_str = "; ".join(
+        f"{c.get('codigo','')} {c.get('descricao','')}".strip()
+        for c in cnaes_sec if isinstance(c, dict)
+    ) or "N/A"
+
+    return {
+        "Loja": nome_fantasia or razao,
+        "Cidade": endereco.get("municipio","N/A"),
+        "CNPJ": cnpj_full or "N/A",
+        "Razão Social": razao or "N/A",
+        "Nome Fantasia": nome_fantasia or "N/A",
+        "Abertura": item.get("data_inicio_atividade","N/A"),
+        "Porte": item.get("porte","N/A"),
+        "Situação": item.get("situacao_cadastral","N/A"),
+        "Email": item.get("email","N/A"),
+        "Telefone": item.get("telefone_1") or item.get("telefone_2") or "N/A",
+        "UF": endereco.get("uf","N/A"),
+        "Município": endereco.get("municipio","N/A"),
+        "CEP": endereco.get("cep","N/A"),
+        "Logradouro": endereco.get("logradouro","N/A"),
+        "Número": endereco.get("numero","N/A"),
+        "Bairro": endereco.get("bairro","N/A"),
+        "CNAE Principal": item.get("cnae_principal",{}).get("codigo","N/A") if isinstance(item.get("cnae_principal"),dict) else item.get("cnae_principal","N/A"),
+        "CNAE Desc": item.get("cnae_principal",{}).get("descricao","N/A") if isinstance(item.get("cnae_principal"),dict) else "N/A",
+        "CNAEs Secundários": cnaes_str,
+        "Sócios (QSA)": "N/A",  # enriquecido depois via BrasilAPI
+        "Instagram": "N/A",
+        "Website": "N/A",
+        "Fonte": "Nuvem Fiscal",
+        "Status": "OK",
+    }
 
 # ── BrasilAPI ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -540,20 +668,37 @@ with tab1:
         if p["running"]: time.sleep(0.15); st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — CNPJ
+# TAB 2 — CNPJ (Nuvem Fiscal)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     col_panel2, col_main2 = st.columns([0.28, 0.72], gap="large")
 
     with col_panel2:
-        cnpj_source = st.radio("Fonte", ["Cidade/Bairro (OSM)", "Lista manual", "Usar leads da prospecção"], key="cnpj_src")
-        if cnpj_source == "Cidade/Bairro (OSM)":
-            cnpj_cities = st.text_area("Cidades ou bairros", placeholder="São Paulo\nCuritiba", height=100, key="cnpj_cities")
-        elif cnpj_source == "Lista manual":
-            cnpj_lista = st.text_area("Lista (Loja, Cidade)", placeholder="Boutique Rosa, São Paulo\nLoja Sol, Curitiba", height=120, key="cnpj_lista")
+        if not NF_CLIENT_ID or not NF_CLIENT_SECRET:
+            st.error("⚠️ Configure NUVEM_FISCAL_CLIENT_ID e NUVEM_FISCAL_CLIENT_SECRET nos Secrets.")
         else:
-            st.caption("Usa os leads coletados na aba Prospecção.")
-        cnpj_max = st.slider("Máximo de lojas", 10, 300, 80, step=10, key="cnpj_max")
+            st.success("✅ Nuvem Fiscal configurada")
+
+        st.markdown("**Cidades ou bairros**")
+        cnpj_cities = st.text_area("", placeholder="São Paulo\nCuritiba\nFlorianópolis",
+                                   height=110, key="cnpj_cities", label_visibility="collapsed")
+        st.caption("Uma por linha. O app busca **todas as lojas ativas com CNAE 4781400** em cada cidade diretamente na Receita Federal.")
+
+        cnpj_max = st.slider("Máximo de empresas por cidade", 10, 300, 100, step=10, key="cnpj_max")
+
+        enrich_cnpj_ig = st.checkbox("Buscar Instagram (Google Places + Claude)", value=True, key="cnpj_enrich_ig")
+        enrich_cnpj_socios = st.checkbox("Buscar sócios via BrasilAPI", value=True, key="cnpj_socios")
+
+        st.markdown(f"""
+<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:12px;font-size:12px;line-height:2;margin-top:8px">
+  <b>Fluxo por empresa:</b><br>
+  1️⃣ {"✅" if NF_CLIENT_ID else "❌"} Nuvem Fiscal → CNPJ + dados fiscais<br>
+  2️⃣ {"✅" if enrich_cnpj_socios else "⬜"} BrasilAPI → sócios (QSA)<br>
+  3️⃣ {"✅" if GOOGLE_KEY else "❌"} Google Places → telefone + site<br>
+  4️⃣ {"✅" if GOOGLE_KEY else "❌"} Site da loja → Instagram<br>
+  5️⃣ {"✅" if ANTHROPIC_KEY else "❌"} Claude Search → Instagram (fallback)<br>
+</div>
+""", unsafe_allow_html=True)
 
         j = st.session_state.cnpj_job
         c1, c2 = st.columns(2)
@@ -561,85 +706,140 @@ with tab2:
         with c2:
             if st.button("⏹ Parar", key="cnpj_stop", disabled=not j["running"]): j["stop"] = True
 
+    # ── Iniciar job ───────────────────────────────────────────────────────────
     if start_cnpj:
-        items: List[Dict[str,str]] = []
-        if cnpj_source == "Cidade/Bairro (OSM)":
-            for city in [c.strip() for c in re.split(r"[,\n;]+", cnpj_cities) if c.strip()]:
-                for el in overpass_query(city):
-                    tags = el.get("tags",{}); name = tags.get("name")
-                    if name and is_valid_store(name, tags): items.append({"Loja":name,"Cidade":city})
-        elif cnpj_source == "Lista manual":
-            for line in cnpj_lista.splitlines():
-                parts = [p.strip() for p in re.split(r"[,;|]", line) if p.strip()]
-                if len(parts) >= 2: items.append({"Loja":parts[0],"Cidade":parts[1]})
+        city_list = [c.strip() for c in re.split(r"[,\n;]+", cnpj_cities) if c.strip()]
+        if not city_list:
+            st.warning("Digite pelo menos uma cidade.")
+        elif not NF_CLIENT_ID:
+            st.error("Configure as credenciais da Nuvem Fiscal nos Secrets.")
         else:
-            df_leads = st.session_state.leads_df
-            if df_leads is not None and not df_leads.empty:
-                for _, row in df_leads[["Loja","Cidade"]].dropna().iterrows():
-                    items.append({"Loja":str(row["Loja"]),"Cidade":str(row["Cidade"])})
+            with st.spinner("Buscando empresas na Nuvem Fiscal…"):
+                all_items = []
+                for city in city_list:
+                    empresas = nuvem_fiscal_listar_empresas(city, cnae="4781400", limite=cnpj_max)
+                    for emp in empresas:
+                        row = nuvem_fiscal_to_row(emp)
+                        row["_cidade_busca"] = city
+                        all_items.append(row)
 
-        items = items[:cnpj_max]
-        if items:
-            st.session_state.cnpj_rows = []; st.session_state.cnpj_df = pd.DataFrame()
-            j.update({"running":True,"stop":False,"items":items,"idx":0,"ok_total":0,
-                      "attempt_total":0,"target_est":len(items),"current":"","last_error":"","stopped_reason":""})
-            st.rerun()
-        else:
-            st.warning("Nenhum item para processar.")
+            if not all_items:
+                st.warning("Nenhuma empresa encontrada. Verifique as credenciais da Nuvem Fiscal ou tente outra cidade.")
+            else:
+                st.session_state.cnpj_rows = all_items
+                st.session_state.cnpj_df = pd.DataFrame(all_items)
+                j.update({
+                    "running": True, "stop": False,
+                    "items": all_items, "idx": 0,
+                    "ok_total": 0, "attempt_total": 0,
+                    "target_est": len(all_items),
+                    "current": "", "last_error": "", "stopped_reason": "",
+                    "enrich_ig": enrich_cnpj_ig,
+                    "enrich_socios": enrich_cnpj_socios,
+                })
+                st.rerun()
 
     with col_main2:
         j = st.session_state.cnpj_job
 
-        def cnpj_step():
+        # ── Enriquecimento incremental (Google + Instagram + Sócios) ──────────
+        def cnpj_enrich_step():
             if not j["running"] or j.get("stop"):
                 j["running"] = False
                 if not j.get("stopped_reason"): j["stopped_reason"] = "Interrompido"
                 return
-            items = j.get("items",[]); idx = j["idx"]
-            if idx >= len(items): j["running"] = False; j["stopped_reason"] = "Concluída"; return
 
-            item = items[idx]; loja, cidade = item.get("Loja",""), item.get("Cidade","")
-            j["current"] = f"{loja} • {cidade}"; j["idx"] = idx+1; j["attempt_total"] = j.get("attempt_total",0)+1
+            items = st.session_state.cnpj_rows
+            idx = j["idx"]
+            if idx >= len(items):
+                j["running"] = False; j["stopped_reason"] = "Concluída"; return
 
-            cnpj = claude_search_cnpj(loja, cidade)
-            if not cnpj:
-                st.session_state.cnpj_rows.append(cnpj_to_row({},loja,cidade,"N/A","CNPJ não encontrado"))
-            else:
-                data = brasilapi_cnpj(cnpj)
-                if not data:
-                    st.session_state.cnpj_rows.append(cnpj_to_row({},loja,cidade,cnpj,"Erro BrasilAPI"))
-                else:
-                    st.session_state.cnpj_rows.append(cnpj_to_row(data,loja,cidade,cnpj,"OK"))
-                    j["ok_total"] = j.get("ok_total",0)+1
-            if st.session_state.cnpj_rows:
-                st.session_state.cnpj_df = pd.DataFrame(st.session_state.cnpj_rows)
+            row = items[idx]
+            loja  = row.get("Loja","")
+            cidade = row.get("_cidade_busca") or row.get("Cidade","")
+            cnpj  = row.get("CNPJ","")
 
-        if j["running"]: cnpj_step()
+            j["current"] = f"{loja} • {cidade}"
+            j["idx"] = idx + 1
 
+            # Sócios via BrasilAPI
+            if j.get("enrich_socios") and cnpj and cnpj != "N/A":
+                data = brasilapi_cnpj(re.sub(r"\D","", cnpj))
+                if data:
+                    row["Sócios (QSA)"] = socios_str(data)
+                    row["MEI"]     = str(data.get("opcao_pelo_mei","N/A"))
+                    row["Simples"] = str(data.get("opcao_pelo_simples","N/A"))
+                    row["Capital Social"] = data.get("capital_social","N/A")
+
+            # Google Places → telefone + site
+            if j.get("enrich_ig") and GOOGLE_KEY:
+                gplace = google_places_search(loja, cidade)
+                if gplace:
+                    if row.get("Telefone","N/A") == "N/A":
+                        row["Telefone"] = gplace.get("formatted_phone_number","N/A")
+                    if row.get("Website","N/A") == "N/A":
+                        row["Website"] = gplace.get("website","N/A")
+
+            # Instagram via site → Claude Search
+            if j.get("enrich_ig"):
+                website = row.get("Website","N/A")
+                insta = None
+                if website != "N/A":
+                    insta = extract_ig_from_website(website)
+                if not insta and ANTHROPIC_KEY:
+                    insta = claude_search_instagram(loja, cidade, website if website != "N/A" else "")
+                if insta:
+                    row["Instagram"] = f"@{insta}"
+
+            items[idx] = row
+            st.session_state.cnpj_rows = items
+            st.session_state.cnpj_df = pd.DataFrame(items)
+
+        if j["running"]: cnpj_enrich_step()
+
+        # ── Status ────────────────────────────────────────────────────────────
         if j["running"]:
-            st.progress(min(1.0, j["idx"]/max(1,j["target_est"])))
-            st.caption(f"**Processando:** {j['current']}  ({j['idx']}/{j['target_est']})")
+            st.progress(min(1.0, j["idx"] / max(1, j["target_est"])))
+            st.caption(f"**Enriquecendo:** {j['current']}  ({j['idx']}/{j['target_est']})")
+            st.caption("Buscando sócios, telefone, site e Instagram para cada empresa…")
         elif j.get("stopped_reason") and j.get("items"):
             st.success("✅ Concluído!") if j["stopped_reason"] == "Concluída" else st.warning(f"⏹ {j['stopped_reason']}")
 
+        # ── Resultados ────────────────────────────────────────────────────────
         dfc = st.session_state.cnpj_df
         if dfc is None or (hasattr(dfc,"empty") and dfc.empty):
-            if not j["running"]: st.info("Escolha a fonte e clique em **🚀 Iniciar**.")
+            if not j["running"]:
+                st.info("Digite as cidades no painel e clique em **🚀 Iniciar**.")
         else:
-            ok    = int((dfc.get("Status", pd.Series(dtype=str)) == "OK").sum())
-            found = int((dfc.get("CNPJ", pd.Series(dtype=str)).astype(str) != "N/A").sum())
+            total  = len(dfc)
+            ok     = int((dfc.get("Status", pd.Series(dtype=str)) == "OK").sum())
+            w_ig   = int((dfc.get("Instagram", pd.Series(dtype=str)) != "N/A").sum())
+            w_ph   = int((dfc.get("Telefone",  pd.Series(dtype=str)) != "N/A").sum())
+            w_site = int((dfc.get("Website",   pd.Series(dtype=str)) != "N/A").sum())
+
             st.markdown(f"""
 <div class="vv-chip-row">
-  <div class="vv-chip"><span>Total</span> {len(dfc)}</div>
-  <div class="vv-chip"><span>CNPJ encontrado</span> {found}</div>
-  <div class="vv-chip"><span>OK (BrasilAPI)</span> {ok}</div>
+  <div class="vv-chip"><span>Total</span> {total}</div>
+  <div class="vv-chip"><span>Instagram</span> {w_ig}</div>
+  <div class="vv-chip"><span>Telefone</span> {w_ph}</div>
+  <div class="vv-chip"><span>Site</span> {w_site}</div>
+  <div class="vv-chip"><span>OK</span> {ok}</div>
 </div><hr class="vv-hr"/>""", unsafe_allow_html=True)
-            st.dataframe(dfc.tail(80) if j["running"] else dfc, use_container_width=True, hide_index=True)
+
+            cols_show = ["Loja","Cidade","CNPJ","Razão Social","Situação","Telefone","Website","Instagram","Sócios (QSA)","Bairro","UF","Abertura","Porte","Status"]
+            cols_show = [c for c in cols_show if c in dfc.columns]
+            st.dataframe(dfc[cols_show].tail(80) if j["running"] else dfc[cols_show],
+                         use_container_width=True, hide_index=True)
+
             if not j["running"]:
                 out = BytesIO()
-                with pd.ExcelWriter(out, engine="openpyxl") as w: dfc.to_excel(w, index=False, sheet_name="Empresas")
+                export_df = dfc.drop(columns=["_cidade_busca"], errors="ignore")
+                with pd.ExcelWriter(out, engine="openpyxl") as w:
+                    export_df.to_excel(w, index=False, sheet_name="Empresas")
                 st.download_button("📥 Baixar Excel", out.getvalue(), "empresas_verso_vivo.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                st.caption(f"Mostrando os 80 mais recentes. Total: {total}")
 
         if j["running"]: time.sleep(0.15); st.rerun()
 
