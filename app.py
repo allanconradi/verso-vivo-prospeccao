@@ -711,29 +711,7 @@ with tab2:
             if st.button("⏹ Parar", key="cnpj_stop", disabled=not j["running"]): j["stop"] = True
 
     # ── Iniciar job ───────────────────────────────────────────────────────────
-    
-    if st.button("🔍 Debug Nuvem Fiscal", key="debug_nf"):
-    st.write("**1. Testando token...**")
-    token = nuvem_fiscal_token()
-    st.write(f"Token: `{token[:30]}...`" if token else "❌ Token None — falha na autenticação")
-    
-    if token:
-        st.write("**2. Buscando código IBGE de São Paulo...**")
-        codigo = ibge_municipio_code("São Paulo")
-        st.write(f"Código IBGE: `{codigo}`")
         
-        if codigo:
-            st.write("**3. Chamando a API Nuvem Fiscal...**")
-            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-            r = SESSION.get(
-                "https://api.nuvemfiscal.com.br/cnpj",
-                headers=headers,
-                params={"cnae_principal": "4781400", "municipio": codigo, "natureza_juridica": "2135", "$top": 5},
-                timeout=30
-            )
-            st.write(f"Status HTTP: `{r.status_code}`")
-            st.json(r.json())
-    
     if start_cnpj:
         city_list = [c.strip() for c in re.split(r"[,\n;]+", cnpj_cities) if c.strip()]
         if not city_list:
