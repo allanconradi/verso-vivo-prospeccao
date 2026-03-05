@@ -745,6 +745,31 @@ with tab2:
                 st.rerun()
 
     with col_main2:
+# DEBUG TEMPORÁRIO — remova depois
+    if st.button("🔍 Debug Nuvem Fiscal", key="debug_nf"):
+        st.write("**1. Testando token...**")
+        token = nuvem_fiscal_token()
+        st.write(f"Token: `{token[:30]}...`" if token else "❌ Token None")
+        
+        if token:
+            st.write("**2. Código IBGE São Paulo...**")
+            codigo = ibge_municipio_code("São Paulo")
+            st.write(f"Código IBGE: `{codigo}`")
+            
+            if codigo:
+                st.write("**3. Chamando Nuvem Fiscal...**")
+                headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+                r = SESSION.get(
+                    "https://api.nuvemfiscal.com.br/cnpj",
+                    headers=headers,
+                    params={"cnae_principal":"4781400","municipio":codigo,"natureza_juridica":"2135","$top":5},
+                    timeout=30
+                )
+                st.write(f"Status HTTP: `{r.status_code}`")
+                st.json(r.json())
+
+    j = st.session_state.cnpj_job  # linha que já existia
+    
         j = st.session_state.cnpj_job
 
         # ── Enriquecimento incremental (Google + Instagram + Sócios) ──────────
