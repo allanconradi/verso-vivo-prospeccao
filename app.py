@@ -698,7 +698,25 @@ with tab2:
                 status_placeholder.empty()
 
                 if not items:
-                    st.error(f"Nenhuma empresa encontrada com CNAE 4781400 em **{cnpj_cidade}**. Verifique o nome da cidade (use o nome completo, ex: 'São Paulo').")
+                    # Debug: mostra o que aconteceu internamente
+                    folder = get_rf_latest_folder()
+                    st.error(f"Nenhuma empresa encontrada com CNAE 4781400 em **{cnpj_cidade}**.")
+                    with st.expander("🔍 Diagnóstico"):
+                        st.write(f"**Pasta RF detectada:** `{folder}`")
+                        municipios = get_municipios_rf()
+                        st.write(f"**Total de municípios carregados:** {len(municipios)}")
+                        cod = find_municipio_code(cnpj_cidade.strip(), municipios)
+                        st.write(f"**Código IBGE encontrado para '{cnpj_cidade}':** `{cod}`")
+                        if not municipios:
+                            st.warning("Falha ao baixar tabela de municípios da RF. O servidor pode estar lento.")
+                        elif not cod:
+                            cidade_norm = norm(cnpj_cidade.strip())
+                            similares = [(c, n) for c, n in municipios.items() if cidade_norm[:4] in n][:10]
+                            st.write("**Municípios similares encontrados:**")
+                            for c, n in similares:
+                                st.write(f"- `{c}` → {n}")
+                        url_test = f"{RF_BASE_URL}/{folder}/Municipios.zip"
+                        st.write(f"**URL testada:** `{url_test}`")
                 else:
                     st.session_state.cnpj_rows = items
                     st.session_state.cnpj_df = pd.DataFrame(items)
