@@ -1,13 +1,3 @@
-"""
-Verso Sourcing Pro — v3
-Streamlit Cloud ready.
-
-Secrets (Streamlit Cloud > App Settings > Secrets):
-  ANTHROPIC_API_KEY = "sk-ant-..."
-  META_USER_TOKEN_LONG = "EAASx..."
-  GOOGLE_PLACES_KEY = "AIza..."
-  IG_USER_ID = "17841473844567187"
-"""
 
 import streamlit as st
 import pandas as pd
